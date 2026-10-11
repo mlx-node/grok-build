@@ -102,6 +102,7 @@ fn message_delta_with_stop(stop: messages::StopReason) -> MessageStreamEvent {
             input_tokens: Some(10),
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
+            ..Default::default()
         },
     }
 }
@@ -123,6 +124,7 @@ fn message_delta_refusal_with_explanation(explanation: &str) -> MessageStreamEve
             input_tokens: Some(10),
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
+            ..Default::default()
         },
     }
 }
@@ -872,6 +874,29 @@ fn message_delta_with_cache(
             input_tokens: input,
             cache_read_input_tokens: cache_read,
             cache_creation_input_tokens: cache_creation,
+            ..Default::default()
+        },
+    }
+}
+
+/// mlx-node fork: the local MLX server's terminal `message_delta.usage` carries perf counters.
+fn message_delta_with_perf(perf: xai_grok_sampling_types::TurnPerf) -> MessageStreamEvent {
+    MessageStreamEvent::MessageDelta {
+        delta: MessageDeltaBody {
+            stop_reason: Some(messages::StopReason::EndTurn),
+            stop_sequence: None,
+            stop_details: None,
+        },
+        usage: MessageDeltaUsage {
+            output_tokens: 123,
+            input_tokens: Some(2300),
+            cache_read_input_tokens: Some(2100),
+            cache_creation_input_tokens: Some(0),
+            time_to_first_token_ms: perf.ttft_ms,
+            prefill_tokens_per_second: perf.prefill_tokens_per_second,
+            decode_tokens_per_second: perf.decode_tokens_per_second,
+            prefill_input_tokens: perf.prefill_input_tokens,
+            cached_prefix_tokens: perf.cached_prefix_tokens,
         },
     }
 }
@@ -945,4 +970,46 @@ async fn pure_cache_hit_with_zero_uncached_still_emits_usage() {
     assert_eq!(usage.prompt_tokens, 2500);
     assert_eq!(usage.cached_prompt_tokens, 2500);
     assert_eq!(usage.total_tokens, 2501);
+}
+
+#[tokio::test]
+async fn message_delta_perf_fields_land_on_response() {
+    // mlx-node fork: the MLX server's usage extension becomes `ConversationResponse::perf`.
+    let perf = xai_grok_sampling_types::TurnPerf {
+        ttft_ms: Some(450.2),
+        prefill_tokens_per_second: Some(412.5),
+        decode_tokens_per_second: Some(38.1),
+        prefill_input_tokens: Some(200),
+        cached_prefix_tokens: Some(2100),
+    };
+    let events = vec![
+        Ok(message_start()),
+        Ok(message_delta_with_perf(perf)),
+        Ok(MessageStreamEvent::MessageStop),
+    ];
+    let raw = stream::iter(events).boxed();
+    let evs = collect(stream_messages(raw, None, rid(), Duration::from_secs(60))).await;
+    match evs.last().unwrap() {
+        SamplingEvent::Completed { response, .. } => {
+            assert_eq!(response.perf, Some(perf));
+        }
+        other => panic!("expected Completed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn absent_perf_fields_leave_response_perf_none() {
+    let events = vec![
+        Ok(message_start()),
+        Ok(message_delta_with_stop(messages::StopReason::EndTurn)),
+        Ok(MessageStreamEvent::MessageStop),
+    ];
+    let raw = stream::iter(events).boxed();
+    let evs = collect(stream_messages(raw, None, rid(), Duration::from_secs(60))).await;
+    match evs.last().unwrap() {
+        SamplingEvent::Completed { response, .. } => {
+            assert_eq!(response.perf, None);
+        }
+        other => panic!("expected Completed, got {other:?}"),
+    }
 }

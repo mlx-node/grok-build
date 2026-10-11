@@ -384,11 +384,16 @@ impl acp::Agent for MvpAgent {
             true
         };
         self.auth_manager.set_first_party_env_api_key_ok(first_party_env_ok);
-        let has_external_api_key = auth_method::should_advertise_xai_api_key_with_env_ok(
-            disable_api_key_auth,
-            self.models_manager.models().values(),
-            first_party_env_ok,
-        );
+        // mlx-node fork: a loopback endpoint is the local mlx host — it
+        // ignores auth, so advertise xai.api_key even without XAI_API_KEY or
+        // BYOK; authenticate() stamps a placeholder bearer for it.
+        let loopback_endpoint = xai_grok_shell_base::util::is_loopback_url(&xai_api_base_url);
+        let has_external_api_key = loopback_endpoint
+            || auth_method::should_advertise_xai_api_key_with_env_ok(
+                disable_api_key_auth,
+                self.models_manager.models().values(),
+                first_party_env_ok,
+            );
         let init_token_state = self.auth_manager.cached_token_state();
         let init_has_current = matches!(init_token_state, CachedTokenState::Valid(_));
         let init_is_expired = matches!(init_token_state, CachedTokenState::Expired);
@@ -696,13 +701,21 @@ impl acp::Agent for MvpAgent {
                         .values()
                         .any(|m| m.has_own_credentials())
                     {
-                        emit_login_span(false, "api_key", None, Some("no_credentials"));
-                        return Err(
-                            acp::Error::auth_required()
-                                .data(
-                                    "Set XAI_API_KEY or add api_key/env_key to config.toml.",
-                                ),
-                        );
+                        // mlx-node fork: a loopback endpoint (local mlx host)
+                        // ignores auth — stamp the placeholder bearer instead
+                        // of demanding credentials.
+                        let xai_base = self.cfg.borrow().endpoints.xai_api_base_url.clone();
+                        if xai_grok_shell_base::util::is_loopback_url(&xai_base) {
+                            sampling_config.api_key = Some("mlx-local".to_owned());
+                        } else {
+                            emit_login_span(false, "api_key", None, Some("no_credentials"));
+                            return Err(
+                                acp::Error::auth_required()
+                                    .data(
+                                        "Set XAI_API_KEY or add api_key/env_key to config.toml.",
+                                    ),
+                            );
+                        }
                     }
                 }
                 self.set_auth_method(arguments.method_id.clone());

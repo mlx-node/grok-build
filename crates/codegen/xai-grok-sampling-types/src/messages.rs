@@ -129,6 +129,10 @@ pub enum ContentBlock {
     },
     Thinking {
         thinking: String,
+        // mlx-node fork: optional on parse — local MLX servers have no
+        // encrypted-reasoning service and may emit thinking blocks without
+        // one; serialization keeps writing whatever we parsed (or "").
+        #[serde(default)]
         signature: String,
     },
     /// Encrypted reasoning the model chose to redact: an opaque `data` blob, never plaintext.
@@ -329,6 +333,18 @@ pub struct MessageDeltaUsage {
     pub cache_read_input_tokens: Option<u32>,
     #[serde(default)]
     pub cache_creation_input_tokens: Option<u32>,
+    // mlx-node fork: the local MLX server's `message_delta.usage` carries
+    // per-response perf counters; optional so other backends parse unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_to_first_token_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefill_tokens_per_second: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decode_tokens_per_second: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefill_input_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_prefix_tokens: Option<u32>,
 }
 
 /// Content delta within a content_block_delta event
@@ -466,6 +482,35 @@ mod tests {
             }
             other => panic!("expected MessageDelta, got {other:?}"),
         }
+    }
+
+    /// mlx-node fork: the local MLX server stamps per-response perf counters on `message_delta.usage`.
+    /// They must parse; other backends omit them and every field stays `None`.
+    #[test]
+    fn message_delta_parses_mlx_perf_extension_fields() {
+        let event: MessageStreamEvent = serde_json::from_str(
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":123,"input_tokens":2300,"cache_read_input_tokens":2100,"cache_creation_input_tokens":0,"time_to_first_token_ms":450.2,"prefill_tokens_per_second":412.5,"decode_tokens_per_second":38.1,"prefill_input_tokens":200,"cached_prefix_tokens":2100}}"#,
+        )
+        .expect("mlx perf message_delta must deserialize");
+        let MessageStreamEvent::MessageDelta { usage, .. } = event else {
+            panic!("expected MessageDelta");
+        };
+        assert_eq!(usage.output_tokens, 123);
+        assert_eq!(usage.time_to_first_token_ms, Some(450.2));
+        assert_eq!(usage.prefill_tokens_per_second, Some(412.5));
+        assert_eq!(usage.decode_tokens_per_second, Some(38.1));
+        assert_eq!(usage.prefill_input_tokens, Some(200));
+        assert_eq!(usage.cached_prefix_tokens, Some(2100));
+
+        let event: MessageStreamEvent = serde_json::from_str(
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}"#,
+        )
+        .expect("plain message_delta must deserialize");
+        let MessageStreamEvent::MessageDelta { usage, .. } = event else {
+            panic!("expected MessageDelta");
+        };
+        assert_eq!(usage.time_to_first_token_ms, None);
+        assert_eq!(usage.cached_prefix_tokens, None);
     }
 
     /// A `redacted_thinking` content block must deserialize into the dedicated variant, preserving the opaque `data`.

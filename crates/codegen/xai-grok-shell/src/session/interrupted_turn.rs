@@ -42,6 +42,7 @@ impl InterruptedTurn {
             None,
             None,
             None,
+            None,
         );
         let notification = crate::extensions::notification::SessionNotification {
             session_id: session_id.clone(),

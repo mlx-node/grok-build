@@ -106,6 +106,9 @@ pub fn stream_messages<'a>(
         // The provider sends the matched stop sequence in `message_delta.stop_sequence` on a `stop_sequence`-terminated turn
         // It is carried through so the headless `streaming-messages-json` consumer can echo it
         let mut final_stop_sequence: Option<String> = None;
+        // mlx-node fork: per-response perf counters ride `message_delta.usage`
+        // on the local MLX server; last-wins like the other usage fields.
+        let mut final_perf = xai_grok_sampling_types::TurnPerf::default();
 
         // Assistant-response accumulators (built up as ContentBlockStop events fire)
         // Each thinking block becomes its own `rs::ReasoningItem`, emitted as sibling `ConversationItem::Reasoning`s before the trailing Assistant
@@ -458,6 +461,22 @@ pub fn stream_messages<'a>(
                     if let Some(cache_creation) = usage.cache_creation_input_tokens {
                         final_cache_creation_input_tokens = cache_creation;
                     }
+                    // mlx-node fork: extension fields on `message_delta.usage` (absent on other backends)
+                    if let Some(ttft) = usage.time_to_first_token_ms {
+                        final_perf.ttft_ms = Some(ttft);
+                    }
+                    if let Some(tps) = usage.prefill_tokens_per_second {
+                        final_perf.prefill_tokens_per_second = Some(tps);
+                    }
+                    if let Some(tps) = usage.decode_tokens_per_second {
+                        final_perf.decode_tokens_per_second = Some(tps);
+                    }
+                    if let Some(n) = usage.prefill_input_tokens {
+                        final_perf.prefill_input_tokens = Some(n);
+                    }
+                    if let Some(n) = usage.cached_prefix_tokens {
+                        final_perf.cached_prefix_tokens = Some(n);
+                    }
                 }
 
                 MessageStreamEvent::MessageStop => {
@@ -580,6 +599,9 @@ pub fn stream_messages<'a>(
             message_id: final_message_id,
             raw_stop_reason: final_raw_stop_reason,
             stop_sequence: final_stop_sequence,
+            // `Some` only when the server reported at least one perf counter.
+            perf: (final_perf != xai_grok_sampling_types::TurnPerf::default())
+                .then_some(final_perf),
         };
 
         yield SamplingEvent::Completed {

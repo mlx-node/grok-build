@@ -1869,6 +1869,7 @@ fn needs_animation_gates_pending_turn_end_reconcile() {
             cancellation_category: None,
             cancellation_context: None,
             error_kind: None,
+            perf: None,
             received_at: std::time::Instant::now()
                 - (TURN_END_RECONCILE_GRACE + std::time::Duration::from_secs(1)),
         });

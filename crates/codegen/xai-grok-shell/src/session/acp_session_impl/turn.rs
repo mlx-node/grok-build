@@ -242,6 +242,8 @@ struct TurnSpanTotals {
     output_tokens: i64,
     cache_read_tokens: i64,
     has_tool_call: bool,
+    /// mlx-node fork: this round's response perf counters (last-wins per round like `stop_reason`).
+    last_response_perf: Option<xai_grok_sampling_types::TurnPerf>,
 }
 /// Sums of every completed round's [`TurnSpanTotals`], stamped on the turn's one turn-end
 /// snapshot (`take_completed_turn_snapshot`).
@@ -250,6 +252,8 @@ pub(super) struct TurnSampling {
     pub(super) input_tokens: u64,
     pub(super) output_tokens: u64,
     pub(super) cache_read_tokens: u64,
+    /// mlx-node fork: the last response's perf counters, for the terminal `TurnCompleted` update.
+    pub(super) last_response_perf: Option<xai_grok_sampling_types::TurnPerf>,
 }
 impl TurnSampling {
     /// Takes the round by value: a late interjection continues the loop after bookkeeping, and
@@ -258,6 +262,7 @@ impl TurnSampling {
         self.input_tokens += round.input_tokens.max(0) as u64;
         self.output_tokens += round.output_tokens.max(0) as u64;
         self.cache_read_tokens += round.cache_read_tokens.max(0) as u64;
+        self.last_response_perf = round.last_response_perf;
     }
 }
 impl TurnSpanTotals {
@@ -278,6 +283,8 @@ impl TurnSpanTotals {
         }
         self.has_tool_call |= !response.tool_calls().is_empty();
         span.record("response.has_tool_call", self.has_tool_call);
+        // mlx-node fork: keep the response's server-reported perf for the turn terminal.
+        self.last_response_perf = response.perf;
         record_last_sample(
             span,
             response
@@ -2502,6 +2509,7 @@ impl SessionActor {
         snapshot.turn_input_tokens = sampling.input_tokens;
         snapshot.turn_output_tokens = sampling.output_tokens;
         snapshot.turn_cached_input_tokens = sampling.cache_read_tokens;
+        snapshot.last_response_perf = sampling.last_response_perf;
         self.apply_prompt_modes_to_snapshot(&mut snapshot);
         Some(snapshot)
     }
@@ -4391,6 +4399,7 @@ mod last_sample_span_tests {
             message_id: None,
             raw_stop_reason: None,
             stop_sequence: None,
+            perf: None,
         };
         if with_tool_call && let Some(a) = response.assistant_mut() {
             a.tool_calls.push(ToolCall {

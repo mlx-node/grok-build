@@ -79,6 +79,8 @@ pub(crate) struct TerminalMarkerInput<'a> {
     /// Typed kind of a failed stop; picks error-specific failure copy.
     pub error_kind: Option<WireErrorType>,
     pub error_banner_present: bool,
+    /// mlx-node fork: the turn's perf counters from the terminal `TurnCompleted` (`None` on old shells / other backends).
+    pub perf: Option<xai_grok_shell::extensions::notification::TurnPerf>,
 }
 
 /// Saturating `Duration` to ms conversion; missing stays `None`.
@@ -94,7 +96,10 @@ pub(crate) fn terminal_marker(input: TerminalMarkerInput<'_>) -> Option<SessionE
         | TurnStopReason::Refusal
         | TurnStopReason::MaxTokens
         | TurnStopReason::MaxTurnRequests
-        | TurnStopReason::Unknown => Some(SessionEvent::TurnCompleted { elapsed }),
+        | TurnStopReason::Unknown => Some(SessionEvent::TurnCompleted {
+            elapsed,
+            perf: input.perf,
+        }),
         TurnStopReason::Cancelled if input.send_now_cancel => None,
         TurnStopReason::Cancelled => Some(cancelled_turn_event(
             input.cancel_trigger,
@@ -359,6 +364,8 @@ pub(super) struct TerminalSignal<'a> {
     pub cancellation_context: Option<&'a serde_json::Value>,
     /// Typed kind of a failed stop, parsed at the wire ingress (`wire_error_kind`: absent maps to `None`, unknown to `Some(Other)`).
     pub error_kind: Option<WireErrorType>,
+    /// mlx-node fork: the turn's perf counters from `TurnCompleted.perf` (`None` on old shells / other rails).
+    pub perf: Option<xai_grok_shell::extensions::notification::TurnPerf>,
 }
 
 /// What applying a terminal turn signal did to one agent.
@@ -389,6 +396,7 @@ fn arm_driver_turn_end_reconcile(
         cancellation_category,
         cancellation_context,
         error_kind,
+        perf,
     } = signal;
     if agent.session.loading_replay {
         return false;
@@ -431,6 +439,7 @@ fn arm_driver_turn_end_reconcile(
             cancellation_category: cancellation_category.map(str::to_string),
             cancellation_context: cancellation_context.cloned(),
             error_kind,
+            perf,
             received_at,
         });
         crate::unified_log::info(
@@ -465,6 +474,7 @@ fn arm_driver_turn_end_reconcile(
         cancellation_category: cancellation_category.map(str::to_string),
         cancellation_context: cancellation_context.cloned(),
         error_kind,
+        perf,
         received_at: std::time::Instant::now(),
     });
     true
@@ -505,6 +515,7 @@ pub(super) fn finalize_turn_from_terminal(
         cancellation_category,
         cancellation_context,
         error_kind,
+        perf,
     } = signal;
     if !agent.attached_as_viewer {
         if arm_driver_turn_end_reconcile(agent, session_id, signal) {
@@ -554,6 +565,7 @@ pub(super) fn finalize_turn_from_terminal(
         error_banner_present: super::dispatch::scrollback_has_recent_error_banner(
             &agent.scrollback,
         ),
+        perf,
     });
     push_turn_terminal_marker(agent, event);
 
@@ -612,6 +624,7 @@ pub(super) fn finalize_child_view_turn(
         cancel_trigger,
         cancellation_category,
         error_kind,
+        perf,
         ..
     } = signal;
 
@@ -656,6 +669,7 @@ pub(super) fn finalize_child_view_turn(
         error_banner_present: super::dispatch::scrollback_has_recent_error_banner(
             &child.scrollback,
         ),
+        perf,
     });
     if other_prompt {
         if let Some(event) = event {

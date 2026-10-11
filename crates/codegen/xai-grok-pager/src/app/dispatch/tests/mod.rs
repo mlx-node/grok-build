@@ -576,6 +576,7 @@ fn arm_reconcile_with_meta(
             cancellation_category: cancellation_category.map(str::to_string),
             cancellation_context: None,
             error_kind: None,
+            perf: None,
             received_at: std::time::Instant::now() - age,
         });
 }

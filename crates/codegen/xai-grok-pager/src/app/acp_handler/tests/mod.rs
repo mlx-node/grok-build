@@ -1105,6 +1105,7 @@ pub(super) fn xai_turn_completed_notif(
             error_kind: None,
             usage: None,
             elapsed_ms: None,
+                    perf: None,
         },
         meta: Some(serde_json::json!({ "isReplay": is_replay })),
     };
@@ -1134,6 +1135,7 @@ pub(super) fn xai_turn_completed_replay(
             error_kind: None,
             usage: None,
             elapsed_ms,
+                    perf: None,
         },
         meta: Some(meta),
     };
@@ -1158,6 +1160,7 @@ pub(super) fn xai_turn_completed_failed_with_error_kind(
             error_kind: Some(error_kind.to_string()),
             usage: None,
             elapsed_ms: None,
+                    perf: None,
         },
         meta: Some(serde_json::json!({ "isReplay": is_replay })),
     };
@@ -1179,6 +1182,7 @@ pub(super) fn xai_turn_completed_notif_with_cancel_trigger(
             error_kind: None,
             usage: None,
             elapsed_ms: None,
+                    perf: None,
         },
         meta: Some(
             serde_json::json!({
@@ -1208,6 +1212,7 @@ pub(super) fn xai_wake_turn_completed_notif(
             error_kind: None,
             usage: None,
             elapsed_ms: None,
+                    perf: None,
         },
         meta: Some(meta),
     };

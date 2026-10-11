@@ -24,6 +24,7 @@ fn response_with_usage(total_tokens: u32) -> ConversationResponse {
         message_id: None,
         raw_stop_reason: None,
         stop_sequence: None,
+        perf: None,
     }
 }
 
@@ -39,6 +40,7 @@ fn response_without_usage() -> ConversationResponse {
         message_id: None,
         raw_stop_reason: None,
         stop_sequence: None,
+        perf: None,
     }
 }
 
@@ -93,6 +95,7 @@ async fn response_reasoning_does_not_inflate_model_reported_context() {
                 message_id: None,
                 raw_stop_reason: None,
                 stop_sequence: None,
+                perf: None,
             };
 
             actor.record_response_token_usage(&response, None);
@@ -168,6 +171,7 @@ async fn response_without_usage_keeps_model_output_as_estimated_growth() {
                 message_id: None,
                 raw_stop_reason: None,
                 stop_sequence: None,
+                perf: None,
             };
 
             actor.record_response_token_usage(&response, None);

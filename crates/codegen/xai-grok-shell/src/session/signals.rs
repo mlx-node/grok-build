@@ -124,6 +124,10 @@ pub struct TurnDeltaSnapshot {
     /// Last served model fingerprint (upstream `system_fingerprint`). See `turn_input_tokens`.
     #[serde(skip)]
     pub model_fingerprint: Option<String>,
+    /// mlx-node fork: perf counters of the turn's last response. Stamped from
+    /// `TurnSampling` post-snapshot; internal transport like the token sums.
+    #[serde(skip)]
+    pub last_response_perf: Option<xai_grok_sampling_types::TurnPerf>,
 }
 
 /// Per-turn delta of counter fields.
@@ -1476,6 +1480,7 @@ impl SessionSignalsActor {
                         turn_output_tokens: 0,
                         turn_cached_input_tokens: 0,
                         model_fingerprint: self.turn_model_fingerprint.take(),
+                        last_response_perf: None,
                     };
 
                     // Store current as baseline for next delta

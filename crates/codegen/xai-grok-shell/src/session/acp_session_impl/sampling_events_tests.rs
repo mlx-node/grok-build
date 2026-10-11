@@ -297,6 +297,7 @@ async fn completed_event_clears_slot_keeps_prior_uncommitted_segments() {
                         message_id: None,
                         raw_stop_reason: None,
                         stop_sequence: None,
+                        perf: None,
                     }),
                     metrics: InferenceLatencyStats::default(),
                 })
@@ -382,6 +383,7 @@ async fn completed_event_releases_stream_drain_barrier_and_timeout_keeps_request
                         message_id: None,
                         raw_stop_reason: None,
                         stop_sequence: None,
+                        perf: None,
                     }),
                     metrics: InferenceLatencyStats::default(),
                 })
@@ -410,6 +412,7 @@ async fn completed_event_releases_stream_drain_barrier_and_timeout_keeps_request
                         message_id: None,
                         raw_stop_reason: None,
                         stop_sequence: None,
+                        perf: None,
                     }),
                     metrics: InferenceLatencyStats::default(),
                 })
@@ -537,6 +540,7 @@ async fn completed_event_releases_stream_drain_barrier_and_timeout_keeps_request
                         message_id: None,
                         raw_stop_reason: None,
                         stop_sequence: None,
+                        perf: None,
                     }),
                     metrics: InferenceLatencyStats::default(),
                 })
@@ -918,6 +922,7 @@ async fn observe_only_confident_completion_stays_warn_only() {
                 message_id: None,
                 raw_stop_reason: None,
                 stop_sequence: None,
+                perf: None,
             };
             actor
                 .handle_sampling_event(SamplingEvent::Completed {
@@ -982,6 +987,7 @@ async fn exact_repetition_completion_is_tracked_for_incidence_only() {
                 message_id: None,
                 raw_stop_reason: None,
                 stop_sequence: None,
+                perf: None,
             };
             let req = RequestId::random();
             let (tx, _rx) = tokio::sync::oneshot::channel::<()>();
@@ -1126,6 +1132,7 @@ async fn doom_loop_recovery_stamps_capture_segments_and_counters() {
                 message_id: None,
                 raw_stop_reason: None,
                 stop_sequence: None,
+                perf: None,
             };
             actor
                 .handle_sampling_event(SamplingEvent::Completed {

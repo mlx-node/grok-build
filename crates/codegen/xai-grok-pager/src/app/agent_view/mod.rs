@@ -549,6 +549,8 @@ pub(crate) struct PendingTurnEnd {
     /// Typed kind of a failed stop from the broadcast, parsed at the wire
     /// ingress (`MaxTokensTruncation` picks the truncation copy).
     pub error_kind: Option<crate::app::error_display::WireErrorType>,
+    /// mlx-node fork: the turn's perf counters from `TurnCompleted.perf` (`None` on old shells / other backends).
+    pub perf: Option<xai_grok_shell::extensions::notification::TurnPerf>,
     /// When the broadcast arrived; the reconcile fires after [`super::dispatch::TURN_END_RECONCILE_GRACE`].
     /// [`super::dispatch::TURN_END_RECONCILE_GRACE`].
     pub received_at: std::time::Instant,

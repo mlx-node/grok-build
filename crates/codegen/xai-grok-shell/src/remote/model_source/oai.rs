@@ -6,6 +6,7 @@ use crate::remote::model_source::ModelSource;
 use serde::Deserialize;
 use xai_grok_login::GrokAuth;
 use xai_grok_login::backend::{ActiveAuthBackend, AuthBackend};
+use xai_grok_shell_base::util::is_loopback_url;
 #[derive(Debug, Deserialize)]
 struct ModelsResponse {
     data: Vec<serde_json::Value>,
@@ -33,7 +34,21 @@ impl ModelSource for OaiModelSource {
         let mut request = client.get(&self.endpoint.url);
         match self.endpoint.auth {
             EndpointAuth::ApiKey => {
-                let api_key = list_fetch_api_key(auth)?;
+                // mlx-node fork: a loopback models endpoint (the local
+                // mlx-node host) needs no real credential — send a
+                // placeholder bearer so the catalog loads without
+                // `XAI_API_KEY` or a grok.com session. Non-loopback
+                // endpoints keep the strict requirement.
+                let api_key = match list_fetch_api_key(auth) {
+                    Ok(key) => key,
+                    Err(err) => {
+                        if is_loopback_url(&self.endpoint.url) {
+                            "mlx-local".to_owned()
+                        } else {
+                            return Err(err);
+                        }
+                    }
+                };
                 request = request.header("Authorization", format!("Bearer {}", api_key));
             }
             EndpointAuth::Session => {

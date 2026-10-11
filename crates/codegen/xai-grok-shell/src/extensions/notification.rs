@@ -5,6 +5,9 @@ use crate::session::feedback::FeedbackRequest as FeedbackRequestData;
 
 pub use crate::extensions::background_task::{BackgroundTaskRow, BackgroundTaskStatus};
 pub use crate::session::goal_tracker::GoalClassifierVerdict;
+// mlx-node fork: the session-update wire shape carries per-response perf counters;
+// clients (the pager) name the type through this crate.
+pub use xai_grok_sampling_types::TurnPerf;
 
 /// Retained for wire backwards compatibility; always empty in the simplified goal model (no deliverables).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -255,6 +258,9 @@ pub struct ResponseUsage {
     pub cache_creation_input_tokens: u64,
     #[serde(default)]
     pub reasoning_tokens: u64,
+    /// mlx-node fork: perf counters this response reported (MLX server extension). `None` on other backends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perf: Option<xai_grok_sampling_types::TurnPerf>,
 }
 
 impl From<&xai_grok_sampling_types::TokenUsage> for ResponseUsage {
@@ -269,6 +275,8 @@ impl From<&xai_grok_sampling_types::TokenUsage> for ResponseUsage {
             cache_read_input_tokens: u64::from(u.cached_prompt_tokens),
             cache_creation_input_tokens: u64::from(u.cache_creation_prompt_tokens),
             reasoning_tokens: u64::from(u.reasoning_tokens),
+            // `TokenUsage` carries no perf; `response_completed_update` stamps it from `ConversationResponse::perf`.
+            perf: None,
         }
     }
 }
@@ -1142,6 +1150,9 @@ pub enum SessionUpdate {
         /// Wall-clock turn duration in milliseconds. `None` on old files.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         elapsed_ms: Option<u64>,
+        /// mlx-node fork: the turn's last response perf counters (prefill/decode tok/s, cache share). `None` on old files and other backends.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        perf: Option<xai_grok_sampling_types::TurnPerf>,
     },
     /// One model response opened (Messages `message_start`), carrying the real message id, model, and input-side token counts. Rides the buffered chunk rail so it is ordered AHEAD of this response's agent chunks.
     /// Headless partial-mode framing consumes it to emit the real `message_start` id and input usage. Without it, framing synthesizes a placeholder id and zero-seeded usage.
@@ -2696,6 +2707,7 @@ mod tests {
             error_kind: Some("max_tokens_truncation".into()),
             usage: None,
             elapsed_ms: None,
+            perf: None,
         };
         let json = serde_json::to_value(&update).unwrap();
         assert_eq!(
@@ -2723,6 +2735,7 @@ mod tests {
             error_kind: None,
             usage: None,
             elapsed_ms: None,
+            perf: None,
         };
         let json = serde_json::to_value(&update).unwrap();
         assert_eq!(
@@ -2744,6 +2757,7 @@ mod tests {
                 error_kind: Some("max_tokens_truncation".into()),
                 usage: None,
                 elapsed_ms: Some(1234),
+                perf: None,
             },
             SessionUpdate::TurnCompleted {
                 prompt_id: "p-min".into(),
@@ -2752,6 +2766,7 @@ mod tests {
                 error_kind: None,
                 usage: None,
                 elapsed_ms: None,
+                perf: None,
             },
         ] {
             let json_str = serde_json::to_string(&update).unwrap();
@@ -2774,6 +2789,7 @@ mod tests {
                 error_kind: None,
                 usage: None,
                 elapsed_ms: None,
+                perf: None,
             }
         );
     }
@@ -2787,6 +2803,7 @@ mod tests {
             error_kind: None,
             usage: None,
             elapsed_ms: Some(1234),
+            perf: None,
         };
         let json = serde_json::to_value(&update).unwrap();
         assert_eq!(json.get("elapsed_ms"), Some(&serde_json::json!(1234)));

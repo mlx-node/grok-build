@@ -170,6 +170,14 @@ fn is_loopback_host(parsed: &reqwest::Url) -> bool {
         None => false,
     }
 }
+/// mlx-node fork: does this URL target a loopback host? Used to let a local
+/// mlx server act as a credential-less endpoint — it ignores auth, so the
+/// fork substitutes a placeholder bearer where one would be required.
+pub fn is_loopback_url(url: &str) -> bool {
+    reqwest::Url::parse(url)
+        .map(|parsed| is_loopback_host(&parsed))
+        .unwrap_or(false)
+}
 /// Truncate a string to at most `max_chars` characters.
 /// Slices at char boundaries so multi-byte UTF-8 never panics.
 pub fn truncate(s: &str, max_chars: usize) -> &str {
