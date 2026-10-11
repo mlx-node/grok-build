@@ -73,7 +73,11 @@ jobs:
           toolchain: "1.94.0"
           targets: ${{ matrix.target }}
 
+      # The action queries the GitHub release API for the protoc zip; the token
+      # avoids anonymous-rate-limit flakes on shared runner IPs.
       - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       # musl targets need musl-gcc for the linker and for aws-lc-rs's C shim.
       # Each musl job runs on a same-arch runner, so musl-gcc is a native compiler.
@@ -83,17 +87,28 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools musl-dev cmake clang
 
+      # -D_GNU_SOURCE exposes u_int*_t in musl headers; sqlite-vec.c needs them.
       - name: Set musl linker (x86_64)
         if: matrix.musl && matrix.asset_arch == 'x86_64'
         run: |
-          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
-          echo "CC_x86_64_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
+          {
+            echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc"
+            echo "CC_x86_64_unknown_linux_musl=musl-gcc"
+            echo "CFLAGS_x86_64_unknown_linux_musl=-D_GNU_SOURCE"
+          } >> "$GITHUB_ENV"
 
       - name: Set musl linker (aarch64)
         if: matrix.musl && matrix.asset_arch == 'aarch64'
         run: |
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
-          echo "CC_aarch64_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
+          {
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc"
+            echo "CC_aarch64_unknown_linux_musl=musl-gcc"
+            echo "CFLAGS_aarch64_unknown_linux_musl=-D_GNU_SOURCE"
+          } >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.target }}
 
       - name: Build mlx-agent
         run: cargo build --release --locked -p xai-grok-pager-bin --target ${{ matrix.target }}
