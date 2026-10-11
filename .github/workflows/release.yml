@@ -103,7 +103,19 @@ jobs:
           shared-key: ${{ matrix.target }}
 
       - name: Build mlx-agent
-        run: cargo build --release --locked -p xai-grok-pager-bin --target ${{ matrix.target }}
+        # musl drops jemalloc: tikv-jemalloc-sys 0.7.1 fails to detect C11
+        # atomics under musl-gcc on aarch64 (and jemalloc is only a perf win —
+        # main.rs falls back to the system allocator when the feature is off).
+        run: |
+          if [ "${{ matrix.musl }}" = "true" ]; then
+            cargo build --release --locked -p xai-grok-pager-bin \
+              --no-default-features --features "stock,sandbox-enforce" \
+              --target ${{ matrix.target }}
+          else
+            cargo build --release --locked -p xai-grok-pager-bin \
+              --target ${{ matrix.target }}
+          fi
+        shell: bash
 
       - name: Package tarball (unix)
         if: runner.os != 'Windows'
