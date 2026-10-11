@@ -162,3 +162,18 @@ jobs:
             --title "mlx-agent ${{ github.ref_name }}" \
             --generate-notes \
             dist/*.tar.gz
+
+      # Mirror the assets to R2 — dl.portato.si serves them off Cloudflare's
+      # edge and is the downloader's preferred source (GitHub stays fallback).
+      - name: Upload assets to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          for f in dist/*.tar.gz; do
+            aws s3 cp "$f" \
+              "s3://mlx-agent-releases/${{ github.ref_name }}/$(basename "$f")" \
+              --endpoint-url "$R2_ENDPOINT"
+          done
