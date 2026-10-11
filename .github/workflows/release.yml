@@ -2,8 +2,8 @@ name: Release mlx-agent
 
 # Tag-driven release: push `mlx-agent-vX.Y.Z` (or any v* tag) to build all
 # targets and attach `mlx-agent-<tag>-<platform>-<arch>.tar.gz` assets.
-# The mlx-node CLI downloads `macos`/`linux` (gnu) assets by that name; the
-# `linux-musl` and `windows` assets are published for future downloader support.
+# The mlx-node CLI downloads `macos`/`linux-musl` assets by that name; the
+# `windows` assets are published for future downloader support.
 on:
   push:
     tags:
@@ -31,16 +31,8 @@ jobs:
             target: x86_64-apple-darwin
             asset_platform: macos
             asset_arch: x86_64
-          # Linux glibc
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            asset_platform: linux
-            asset_arch: x86_64
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            asset_platform: linux
-            asset_arch: aarch64
-          # Linux musl (static)
+          # Linux musl only — the static musl build runs on gnu and musl
+          # hosts alike, so the gnu matrix slots are unnecessary.
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             asset_platform: linux-musl
