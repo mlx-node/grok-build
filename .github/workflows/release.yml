@@ -94,7 +94,7 @@ jobs:
           {
             echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc"
             echo "CC_x86_64_unknown_linux_musl=musl-gcc"
-            echo "CFLAGS_x86_64_unknown_linux_musl=-D_GNU_SOURCE"
+            echo "CFLAGS_x86_64_unknown_linux_musl=-D_GNU_SOURCE -Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int32_t=uint32_t -Du_int64_t=uint64_t"
           } >> "$GITHUB_ENV"
 
       - name: Set musl linker (aarch64)
@@ -103,7 +103,7 @@ jobs:
           {
             echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc"
             echo "CC_aarch64_unknown_linux_musl=musl-gcc"
-            echo "CFLAGS_aarch64_unknown_linux_musl=-D_GNU_SOURCE"
+            echo "CFLAGS_aarch64_unknown_linux_musl=-D_GNU_SOURCE -Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int32_t=uint32_t -Du_int64_t=uint64_t"
           } >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
