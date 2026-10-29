@@ -6019,6 +6019,17 @@ async fn active_session_lease_follows_actor_lifetime() {
                     xai_grok_active_sessions::is_held(&session_id),
                     "{round}: a resident actor holds its lease"
                 );
+                let root = xai_grok_active_sessions::global_root();
+                assert_ne!(xai_grok_config::grok_home(), root, "tests never touch the real home");
+                assert!(xai_grok_active_sessions::wait_synced(std::time::Duration::from_secs(5)));
+                assert!(
+                    xai_grok_active_sessions::list_in(&root)
+                        .expect("registry readable")
+                        .iter()
+                        .any(|s| s.session_id == session_id
+                            && s.holder == xai_grok_active_sessions::Holder::Agent),
+                    "{round}: the agent entry lands in the redirected registry"
+                );
                 assert_eq!(
                     crate::agent::mvp_agent::session_lifecycle::CloseOutcome::Closed,
                     agent.close_active_session(&session_id).await

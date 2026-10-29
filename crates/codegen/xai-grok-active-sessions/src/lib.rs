@@ -7,6 +7,7 @@
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use agent_client_protocol as acp;
@@ -14,7 +15,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 mod lease;
-pub use lease::{Lease, Registrar, hold, is_held};
+pub use lease::{
+    Lease, Registrar, global_root, hold, is_held, redirect_to_temp_for_tests, release_at_exit,
+    wait_synced,
+};
 
 /// Who in process `pid` has the session open. Entries are keyed by (session_id, pid, holder),
 /// so a UI client and the actor in the same or another process never remove each other.
@@ -47,6 +51,27 @@ const TMP_FILENAME: &str = "active_sessions.json.tmp";
 /// read-modify-write, so anything held this long is stranded.
 const LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(2);
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// How long a non-blocking unregister waits when the holder is this process's own registrar
+/// worker, which keeps the lock only for one small read and rewrite.
+const SAME_PROCESS_WAIT: Duration = Duration::from_millis(250);
+
+/// Callers inside [`with_locked_state`] in this process, waiting for or holding the lock.
+static IN_PROCESS_LOCKERS: AtomicUsize = AtomicUsize::new(0);
+
+struct InProcessLocker;
+
+impl InProcessLocker {
+    fn enter() -> Self {
+        IN_PROCESS_LOCKERS.fetch_add(1, Ordering::AcqRel);
+        Self
+    }
+}
+
+impl Drop for InProcessLocker {
+    fn drop(&mut self) {
+        IN_PROCESS_LOCKERS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 /// Register a session as active (idempotent by session_id, pid and holder) and prune entries
 /// whose PID is dead.
@@ -55,8 +80,9 @@ pub fn register(session: ActiveSession) -> io::Result<()> {
     register_in(&xai_grok_config::grok_home(), session)
 }
 
-/// Non-blocking unregister of this process's client entry, for signal handlers.
-/// Returns `Ok(false)` on lock contention; the orphan is pruned by the next `register`.
+/// Non-blocking unregister of this process's client entry, for signal handlers and the UI
+/// thread. Waits up to `SAME_PROCESS_WAIT` only when this process's own registrar worker holds
+/// the lock. Returns `Ok(false)` on other contention; the orphan stays until this pid dies.
 pub fn try_unregister(session_id: &acp::SessionId) -> io::Result<bool> {
     try_unregister_in(&xai_grok_config::grok_home(), session_id)
 }
@@ -75,11 +101,23 @@ pub fn register_in(root: &Path, session: ActiveSession) -> io::Result<()> {
 
 pub fn try_unregister_in(root: &Path, session_id: &acp::SessionId) -> io::Result<bool> {
     let me = std::process::id();
-    let outcome = with_locked_state(root, Duration::ZERO, |sessions| {
+    let remove = |sessions: &mut Vec<ActiveSession>| {
         sessions.retain(|s| {
             !(s.session_id == *session_id && s.pid == me && s.holder == Holder::Client)
         });
-    });
+    };
+    let mut outcome = with_locked_state(root, Duration::ZERO, remove);
+    if outcome
+        .as_ref()
+        .is_err_and(|e| e.kind() == io::ErrorKind::TimedOut)
+    {
+        let wait = if IN_PROCESS_LOCKERS.load(Ordering::Acquire) > 0 {
+            SAME_PROCESS_WAIT
+        } else {
+            Duration::ZERO
+        };
+        outcome = with_locked_state(root, wait, remove);
+    }
     match outcome {
         Ok(()) => Ok(true),
         Err(e) if e.kind() == io::ErrorKind::TimedOut => Ok(false),
@@ -100,6 +138,7 @@ where
     let data_path = root.join(DATA_FILENAME);
     let tmp_path = root.join(TMP_FILENAME);
 
+    let _in_process = InProcessLocker::enter();
     fs::create_dir_all(root)?;
     // Closing the file releases the lock, so every return path unlocks by dropping it.
     let lock_file = open_lock_file(&lock_path)?;
@@ -305,6 +344,28 @@ mod tests {
         assert!(list_in(dir.path()).unwrap().is_empty());
         register_in(dir.path(), make_session("s1", std::process::id())).unwrap();
         assert_eq!(1, list_in(dir.path()).unwrap().len());
+    }
+
+    #[test]
+    fn try_unregister_waits_out_same_process_writer() {
+        let dir = TempDir::new().unwrap();
+        register_in(dir.path(), make_session("s", std::process::id())).unwrap();
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let root = dir.path();
+            scope.spawn(move || {
+                with_locked_state(root, LOCK_ACQUIRE_TIMEOUT, |_| {
+                    held_tx.send(()).unwrap();
+                    let _ = release_rx.recv_timeout(Duration::from_millis(50));
+                })
+                .unwrap();
+            });
+            held_rx.recv().unwrap();
+            assert!(try_unregister_in(root, &acp::SessionId::new("s")).unwrap());
+            drop(release_tx);
+        });
+        assert!(list_in(dir.path()).unwrap().is_empty());
     }
 
     #[test]

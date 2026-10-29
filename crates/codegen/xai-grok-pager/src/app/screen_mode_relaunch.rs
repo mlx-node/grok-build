@@ -207,6 +207,8 @@ pub(crate) fn exec_screen_mode_relaunch(session_id: &str, want_minimal: bool) ->
     eprintln!("Reopening session in {mode_label} mode… (switch back with {reverse})");
     let _ = io::stdout().flush();
     let _ = io::stderr().flush();
+    // exec keeps the pid and skips exit hooks, so the new image would inherit our agent rows.
+    xai_grok_active_sessions::release_at_exit();
 
     #[cfg(unix)]
     {
