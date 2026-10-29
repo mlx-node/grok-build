@@ -137,6 +137,7 @@ pub(crate) fn execute(
                 pid: std::process::id(),
                 cwd,
                 opened_at: chrono::Utc::now(),
+                holder: xai_grok_active_sessions::Holder::Client,
             }) {
                 tracing::warn!(?e, "Failed to register active session");
             }

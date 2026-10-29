@@ -158,6 +158,8 @@ xai-grok-subagent-resolution = { path = "../xai-grok-subagent-resolution" }
 xai-grok-agent = { path = "../xai-grok-agent" }
 xai-grok-bundle = { workspace = true }
 xai-grok-cloud-config = { workspace = true }
+# Agent entries in active_sessions.json for the lifetime of each session actor.
+xai-grok-active-sessions = { workspace = true }
 xai-grok-config = { workspace = true }
 xai-grok-external-agent-migration = { workspace = true }
 xai-grok-feedback = { workspace = true }

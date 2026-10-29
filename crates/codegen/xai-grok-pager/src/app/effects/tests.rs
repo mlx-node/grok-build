@@ -1104,6 +1104,7 @@ fn register_session_in(root: &std::path::Path, id: &str) -> acp::SessionId {
                 pid: std::process::id(),
                 cwd: "/tmp/test".into(),
                 opened_at: chrono::Utc::now(),
+                holder: xai_grok_active_sessions::Holder::Client,
             },
         )
         .expect("register");

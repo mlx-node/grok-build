@@ -1,5 +1,6 @@
-//! Tracks open TUI sessions in `~/.grok/active_sessions.json`. A clean exit removes the entry,
-//! a crash leaves it behind, and the next [`register`] prunes entries whose PID is dead.
+//! Tracks open sessions (UI clients and session actors) in `<grok home>/active_sessions.json`.
+//! A clean exit removes the entry, a crash leaves it behind, and the next [`register`] or
+//! [`Lease`] reconcile prunes entries whose PID is dead.
 
 #![deny(clippy::indexing_slicing)]
 
@@ -12,12 +13,29 @@ use agent_client_protocol as acp;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+mod lease;
+pub use lease::{Lease, Registrar, hold, is_held};
+
+/// Who in process `pid` has the session open. Entries are keyed by (session_id, pid, holder),
+/// so a UI client and the actor in the same or another process never remove each other.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Holder {
+    /// A UI or `-p` front end; entries written before the field existed read as this.
+    #[default]
+    Client,
+    /// A running session actor (the writer), written only through [`Lease`].
+    Agent,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActiveSession {
     pub session_id: acp::SessionId,
     pub pid: u32,
     pub cwd: String,
     pub opened_at: DateTime<Utc>,
+    #[serde(default)]
+    pub holder: Holder,
 }
 
 const DATA_FILENAME: &str = "active_sessions.json";
@@ -30,13 +48,14 @@ const TMP_FILENAME: &str = "active_sessions.json.tmp";
 const LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(2);
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-/// Register a session as active (idempotent by session_id) and prune entries whose PID is dead.
+/// Register a session as active (idempotent by session_id, pid and holder) and prune entries
+/// whose PID is dead.
 /// Fails with [`io::ErrorKind::TimedOut`] if the lock is still held after `LOCK_ACQUIRE_TIMEOUT`.
 pub fn register(session: ActiveSession) -> io::Result<()> {
     register_in(&xai_grok_config::grok_home(), session)
 }
 
-/// Non-blocking unregister for signal handlers.
+/// Non-blocking unregister of this process's client entry, for signal handlers.
 /// Returns `Ok(false)` on lock contention; the orphan is pruned by the next `register`.
 pub fn try_unregister(session_id: &acp::SessionId) -> io::Result<bool> {
     try_unregister_in(&xai_grok_config::grok_home(), session_id)
@@ -44,14 +63,22 @@ pub fn try_unregister(session_id: &acp::SessionId) -> io::Result<bool> {
 
 pub fn register_in(root: &Path, session: ActiveSession) -> io::Result<()> {
     with_locked_state(root, LOCK_ACQUIRE_TIMEOUT, |sessions| {
-        sessions.retain(|s| s.session_id != session.session_id && is_pid_alive(s.pid));
+        sessions.retain(|s| {
+            is_pid_alive(s.pid)
+                && !(s.session_id == session.session_id
+                    && s.pid == session.pid
+                    && s.holder == session.holder)
+        });
         sessions.push(session);
     })
 }
 
 pub fn try_unregister_in(root: &Path, session_id: &acp::SessionId) -> io::Result<bool> {
+    let me = std::process::id();
     let outcome = with_locked_state(root, Duration::ZERO, |sessions| {
-        sessions.retain(|s| s.session_id != *session_id);
+        sessions.retain(|s| {
+            !(s.session_id == *session_id && s.pid == me && s.holder == Holder::Client)
+        });
     });
     match outcome {
         Ok(()) => Ok(true),
@@ -184,7 +211,23 @@ mod tests {
             pid,
             cwd: "/tmp/test".into(),
             opened_at: Utc::now(),
+            holder: Holder::Client,
         }
+    }
+
+    fn with_holder(mut s: ActiveSession, holder: Holder) -> ActiveSession {
+        s.holder = holder;
+        s
+    }
+
+    fn keys(root: &Path) -> Vec<(String, u32, Holder)> {
+        let mut keys: Vec<_> = list_in(root)
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.session_id.0.to_string(), s.pid, s.holder))
+            .collect();
+        keys.sort_by_key(|(id, pid, holder)| (id.clone(), *pid, *holder as u8));
+        keys
     }
 
     #[test]
@@ -262,5 +305,88 @@ mod tests {
         assert!(list_in(dir.path()).unwrap().is_empty());
         register_in(dir.path(), make_session("s1", std::process::id())).unwrap();
         assert_eq!(1, list_in(dir.path()).unwrap().len());
+    }
+
+    #[test]
+    fn legacy_entry_without_holder_reads_as_client() {
+        let dir = TempDir::new().unwrap();
+        let me = std::process::id();
+        fs::write(
+            dir.path().join(DATA_FILENAME),
+            format!(
+                r#"[{{"session_id":"s","pid":{me},"cwd":"/","opened_at":"2026-01-01T00:00:00Z"}}]"#
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            vec![("s".to_string(), me, Holder::Client)],
+            keys(dir.path())
+        );
+    }
+
+    #[test]
+    fn register_keys_by_id_pid_holder() {
+        let dir = TempDir::new().unwrap();
+        let me = std::process::id();
+        let client = make_session("s", me);
+        let agent = with_holder(make_session("s", me), Holder::Agent);
+        for _ in 0..2 {
+            register_in(dir.path(), client.clone()).unwrap();
+            register_in(dir.path(), agent.clone()).unwrap();
+        }
+        assert_eq!(
+            vec![
+                ("s".to_string(), me, Holder::Client),
+                ("s".to_string(), me, Holder::Agent),
+            ],
+            keys(dir.path())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn register_keeps_other_pid_same_id() {
+        let dir = TempDir::new().unwrap();
+        let me = std::process::id();
+        let parent = std::os::unix::process::parent_id();
+        register_in(dir.path(), make_session("s", parent)).unwrap();
+        register_in(dir.path(), make_session("s", me)).unwrap();
+        let mut pids: Vec<u32> = list_in(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|s| s.pid)
+            .collect();
+        pids.sort_unstable();
+        let mut want = vec![parent, me];
+        want.sort_unstable();
+        assert_eq!(want, pids);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_unregister_leaves_agent_and_foreign_entries() {
+        let dir = TempDir::new().unwrap();
+        let me = std::process::id();
+        let parent = std::os::unix::process::parent_id();
+        register_in(
+            dir.path(),
+            with_holder(make_session("s", me), Holder::Agent),
+        )
+        .unwrap();
+        register_in(dir.path(), make_session("s", parent)).unwrap();
+        register_in(dir.path(), make_session("s", me)).unwrap();
+
+        assert!(try_unregister_in(dir.path(), &acp::SessionId::new("s")).unwrap());
+
+        let left = list_in(dir.path()).unwrap();
+        assert_eq!(2, left.len());
+        assert!(
+            left.iter()
+                .any(|s| s.pid == me && s.holder == Holder::Agent)
+        );
+        assert!(
+            left.iter()
+                .any(|s| s.pid == parent && s.holder == Holder::Client)
+        );
     }
 }

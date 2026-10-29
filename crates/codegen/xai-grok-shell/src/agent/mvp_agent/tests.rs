@@ -5968,6 +5968,69 @@ async fn spawn_seeds_root_conversation_group_in_turn_config() {
         })
         .await;
 }
+/// The active-session lease lives exactly as long as the actor: spawn takes it, close (Shutdown)
+/// releases it once the actor drains, and a reload of the same id takes it again.
+#[tokio::test(flavor = "current_thread")]
+async fn active_session_lease_follows_actor_lifetime() {
+    async fn wait_released(agent: &MvpAgent, sid: &acp::SessionId) -> bool {
+        for _ in 0..500 {
+            agent.sweep_dead_sessions();
+            if !xai_grok_active_sessions::is_held(sid) {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        false
+    }
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let agent = build_minimal_agent_for_tests();
+            agent.set_auth_method(acp::AuthMethodId::new("cached_token"));
+            let temp_dir = tempfile::tempdir().expect("temp session cwd");
+            let cwd = xai_grok_paths::AbsPathBuf::new(temp_dir.path().to_path_buf())
+                .expect("absolute temp session cwd");
+            let session_id = acp::SessionId::new(format!("active-lease-{}", uuid::Uuid::new_v4()));
+            let init = acp::InitializeRequest::new(acp::ProtocolVersion::V1).client_capabilities(
+                acp::ClientCapabilities::new()
+                    .fs(acp::FileSystemCapabilities::new())
+                    .terminal(false),
+            );
+            for round in ["spawn", "reload"] {
+                let session_info = SessionInfo {
+                    id: session_id.clone(),
+                    cwd: cwd.as_str().to_owned(),
+                };
+                let model_id = agent.models_manager.current_model_id();
+                let mut options = chat_session_spawn_options(
+                    session_info,
+                    cwd.clone(),
+                    None,
+                    None,
+                    model_id,
+                    false,
+                );
+                options.is_chat_kind = false;
+                agent
+                    .spawn_and_register_session(&init, options, None)
+                    .await
+                    .expect("session spawns");
+                assert!(
+                    xai_grok_active_sessions::is_held(&session_id),
+                    "{round}: a resident actor holds its lease"
+                );
+                assert_eq!(
+                    crate::agent::mvp_agent::session_lifecycle::CloseOutcome::Closed,
+                    agent.close_active_session(&session_id).await
+                );
+                assert!(
+                    wait_released(&agent, &session_id).await,
+                    "{round}: the lease must drop once the closed actor exits"
+                );
+            }
+        })
+        .await;
+}
 /// `remove_session` releases the workspace binding and drains the per-session side maps.
 /// Test agents default to `workspace_ops = None`, so no other test reaches the release.
 #[tokio::test]

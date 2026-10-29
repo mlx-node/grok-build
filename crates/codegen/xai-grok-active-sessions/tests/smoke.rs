@@ -3,7 +3,7 @@
 
 use chrono::Utc;
 use tempfile::TempDir;
-use xai_grok_active_sessions::{ActiveSession, list_in, register_in, try_unregister_in};
+use xai_grok_active_sessions::{ActiveSession, Holder, list_in, register_in, try_unregister_in};
 
 fn session(id: &str, pid: u32) -> ActiveSession {
     ActiveSession {
@@ -11,6 +11,7 @@ fn session(id: &str, pid: u32) -> ActiveSession {
         pid,
         cwd: "/tmp/test".into(),
         opened_at: Utc::now(),
+        holder: Holder::Client,
     }
 }
 

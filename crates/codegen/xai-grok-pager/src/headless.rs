@@ -1075,15 +1075,6 @@ pub async fn run_single_turn(
         session_id = %session_id.0,
         "headless: open_session complete"
     );
-    let track_active = std::env::var("GROK_TRACK_HEADLESS").is_ok();
-    if track_active {
-        let _ = xai_grok_active_sessions::register(xai_grok_active_sessions::ActiveSession {
-            session_id: session_id.clone(),
-            pid: std::process::id(),
-            cwd: cwd.display().to_string(),
-            opened_at: chrono::Utc::now(),
-        });
-    }
     {
         let mcp_servers = if options.output_format == OutputFormat::StreamingMessagesJson {
             mcp_init::resolve_mcp_servers_for_init(&acp_tx, &session_id, &session_cwd).await
@@ -1355,9 +1346,6 @@ pub async fn run_single_turn(
         terminated_by_signal,
     )
     .await;
-    if track_active {
-        let _ = xai_grok_active_sessions::try_unregister(&session_id);
-    }
     if let Some(code) = terminated_by_signal {
         tracing::info!(
             exit_code = code,

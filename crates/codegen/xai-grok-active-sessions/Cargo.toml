@@ -3,7 +3,7 @@ license = "Apache-2.0"
 name = "xai-grok-active-sessions"
 version = "0.1.0"
 edition.workspace = true
-description = "Registry of open TUI sessions in a lock-guarded JSON file under the grok home"
+description = "Registry of open sessions (UI clients and session actors) in a lock-guarded JSON file under the grok home"
 
 [dependencies]
 # `SessionId`, the key each registry entry is filed under.
