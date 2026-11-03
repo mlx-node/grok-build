@@ -26,6 +26,9 @@ pub use opencode::{
     OpenCodeSkillTool, OpenCodeTodoWriteTool, OpenCodeWriteTool,
 };
 #[cfg(test)]
+#[path = "lenient_tool_args_tests.rs"]
+mod lenient_tool_args_tests;
+#[cfg(test)]
 #[path = "tool_feature_names_tests.rs"]
 mod tool_feature_names_tests;
 pub fn extra_write_qualified_ids() -> Vec<String> {

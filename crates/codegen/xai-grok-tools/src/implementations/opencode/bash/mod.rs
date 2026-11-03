@@ -178,7 +178,11 @@ pub struct BashInput {
 
     /// Optional timeout in milliseconds.
     #[schemars(description = "Optional timeout in milliseconds.")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_u64",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub timeout: Option<u64>,
 
     /// Optional working directory. Defaults to the session working directory.

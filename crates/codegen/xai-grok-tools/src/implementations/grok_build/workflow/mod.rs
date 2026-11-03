@@ -98,11 +98,17 @@ pub struct WorkflowToolInput {
 struct WorkflowToolInputWire {
     #[serde(default)]
     source: Option<WorkflowSource>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_u64"
+    )]
     agent_budget: Option<u64>,
     #[serde(default)]
     args: Option<serde_json::Value>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_bool"
+    )]
     validate_only: bool,
     #[serde(default)]
     name: Option<String>,
