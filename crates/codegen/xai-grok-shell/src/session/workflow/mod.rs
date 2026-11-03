@@ -27,11 +27,33 @@ mod builtin_tests {
                 "builtin '{}' needs meta.when_to_use",
                 builtin.name
             );
+            let keys: Vec<&str> = builtin
+                .args_hint
+                .match_indices("\":")
+                .filter_map(|(end, _)| {
+                    let head = &builtin.args_hint[..end];
+                    head.rfind('"').map(|start| &head[start + 1..])
+                })
+                .collect();
             assert!(
-                !builtin.path.is_empty(),
-                "builtin '{}' needs a listing path",
+                !keys.is_empty(),
+                "builtin '{}' needs an args hint",
                 builtin.name
             );
+            for key in keys {
+                let access = format!("args.{key}");
+                let reads_key = builtin.script.match_indices(&access).any(|(at, _)| {
+                    builtin.script[at + access.len()..]
+                        .chars()
+                        .next()
+                        .is_none_or(|next| !(next.is_alphanumeric() || next == '_'))
+                });
+                assert!(
+                    reads_key,
+                    "builtin '{}' args hint names `{key}` but the script never reads args.{key}",
+                    builtin.name
+                );
+            }
         }
     }
 

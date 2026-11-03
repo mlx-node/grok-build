@@ -54,6 +54,18 @@ fn format_entry(workflow: &WorkflowListing) -> String {
     }
     if let Some(path) = workflow.path.as_deref().filter(|text| !text.is_empty()) {
         out.push_str(&format!("\n  Absolute path: {path}"));
+    } else if workflow.source == "builtin" {
+        out.push_str("\n  Built in: there is no script file to read; launch it by name.");
+    }
+    if let Some(args) = workflow
+        .args_hint
+        .as_deref()
+        .filter(|text| !text.is_empty())
+    {
+        out.push_str(&format!(
+            "\n  Launch: source {{\"type\": \"name\", \"name\": \"{}\"}}, args {args}",
+            workflow.name
+        ));
     }
     out
 }
@@ -103,6 +115,7 @@ mod tests {
             when_to_use: when_to_use.map(str::to_string),
             source,
             path: path.map(str::to_string),
+            args_hint: None,
         }
     }
 
@@ -112,21 +125,26 @@ mod tests {
     }
 
     #[test]
-    fn builtin_includes_when_to_use_and_path() {
-        let text = format_workflow_listing(&[listing(
+    fn builtin_has_no_path_and_shows_launch_args() {
+        let mut builtin = listing(
             "deep-research",
             "Research a query with citations.",
             Some("Compare or research a question that needs sourced claims"),
             "builtin",
-            Some("/src/session/workflows/deep_research.rhai"),
-        )])
-        .unwrap();
+            None,
+        );
+        builtin.args_hint = Some(r#"{"query": "<research question>"}"#.to_string());
+        let text = format_workflow_listing(&[builtin]).unwrap();
         assert!(text.contains("- deep-research: Research a query with citations."));
         assert!(
             text.contains("  Use when: Compare or research a question that needs sourced claims")
         );
         assert!(!text.contains("Source:"));
-        assert!(text.contains("  Absolute path: /src/session/workflows/deep_research.rhai"));
+        assert!(!text.contains("Absolute path:"), "{text}");
+        assert!(text.contains("  Built in: there is no script file to read"));
+        assert!(text.contains(
+            r#"  Launch: source {"type": "name", "name": "deep-research"}, args {"query": "<research question>"}"#
+        ));
     }
 
     #[test]
@@ -143,6 +161,8 @@ mod tests {
         assert!(text.contains("  Use when: Review a pull request"));
         assert!(!text.contains("Source:"));
         assert!(text.contains("  Absolute path: /Users/dev/.grok/workflows/review-pr.rhai"));
+        assert!(!text.contains("Built in:"));
+        assert!(!text.contains("Launch:"));
     }
 
     #[test]
