@@ -49,7 +49,10 @@ pub struct MonitorInput {
 
     /// Kill the monitor after this deadline (ms). Ignored when persistent is true.
     /// Default: 36000000 (10 hr). Max: 36000000 (10 hr).
-    #[serde(default = "default_timeout_ms")]
+    #[serde(
+        default = "default_timeout_ms",
+        deserialize_with = "crate::types::schema::deserialize_lenient_u64"
+    )]
     #[schemars(
         description = "Kill the monitor after this deadline (ms). Default: 36000000 (10 hr). Max: 36000000 (10 hr).",
         default = "default_timeout_ms"

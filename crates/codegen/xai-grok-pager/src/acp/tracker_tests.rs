@@ -49,6 +49,14 @@ fn workflow_suppression_keeps_authoring_calls_visible() {
         "workflow",
         serde_json::json!({ "validate_only": true }),
     )));
+    assert!(!is_workflow_tool(&wf(
+        "workflow",
+        serde_json::json!({ "validate_only": "true" }),
+    )));
+    assert!(is_workflow_tool(&wf(
+        "workflow",
+        serde_json::json!({ "validate_only": "false" }),
+    )));
     assert!(is_workflow_tool(&wf(
         "workflow",
         serde_json::json!({ "name": "goal" }),
@@ -3241,6 +3249,12 @@ fn task_output_waits_tracks_timeout_ms() {
     )));
     assert!(waits(Some(
         serde_json::json!({ "task_ids": ["a"], "timeout_ms": 1 })
+    )));
+    assert!(waits(Some(
+        serde_json::json!({ "task_ids": ["a"], "timeout_ms": "300000" })
+    )));
+    assert!(!waits(Some(
+        serde_json::json!({ "task_ids": ["a"], "timeout_ms": "0" })
     )));
 }
 #[test]

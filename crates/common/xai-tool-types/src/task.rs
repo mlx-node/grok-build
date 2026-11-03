@@ -727,7 +727,10 @@ pub struct TaskOutputToolInput {
     #[schemars(
         description = "Max wait time in milliseconds, up to {max_wait_ms}. A positive value waits for completion; omit or pass 0 for a non-blocking status poll."
     )]
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_lenient::deserialize_lenient_u64"
+    )]
     pub timeout_ms: Option<u64>,
 }
 
@@ -808,10 +811,9 @@ pub const MAX_WAIT_MS_PLACEHOLDER: &str = "{max_wait_ms}";
 
 /// Same as [`task_output_waits`], from raw tool-arg JSON (fingerprint / doom-loop).
 pub fn task_output_waits_from_json(args: &serde_json::Value) -> bool {
-    let timeout_ms = args.get("timeout_ms").and_then(|v| {
-        v.as_u64()
-            .or_else(|| v.as_i64().and_then(|i| u64::try_from(i).ok()))
-    });
+    let timeout_ms = args
+        .get("timeout_ms")
+        .and_then(|v| crate::serde_lenient::parse_lenient_u64_value(v).ok());
     task_output_waits(timeout_ms)
 }
 
@@ -935,7 +937,10 @@ pub struct WaitTasksToolInput {
     /// Carries the same `{max_wait_ms}` marker as `TaskOutputToolInput`: this
     /// tool blocks on the same ceiling, so it needs the same resolved bound.
     #[schemars(description = "Max wait time in milliseconds, up to {max_wait_ms}")]
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_lenient::deserialize_lenient_u64"
+    )]
     pub timeout_ms: Option<u64>,
 }
 
@@ -1536,6 +1541,34 @@ pub fn build_wait_tasks_description(naming: &WaitTasksToolNaming) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn waits_from_json_matches_deserialized_waits() {
+        let cases = [
+            (serde_json::json!({"timeout_ms": 300000}), true),
+            (serde_json::json!({"timeout_ms": "300000"}), true),
+            (serde_json::json!({"timeout_ms": " 300000 "}), true),
+            (serde_json::json!({"timeout_ms": "300000.0"}), true),
+            (serde_json::json!({"timeout_ms": 0}), false),
+            (serde_json::json!({"timeout_ms": "0"}), false),
+            (serde_json::json!({"timeout_ms": null}), false),
+            (serde_json::json!({}), false),
+            (serde_json::json!({"timeout_ms": -5}), false),
+            (serde_json::json!({"timeout_ms": "-5"}), false),
+            (serde_json::json!({"timeout_ms": 1.5}), false),
+            (serde_json::json!({"timeout_ms": "1.5"}), false),
+            (serde_json::json!({"timeout_ms": "abc"}), false),
+        ];
+        for (args, expected) in cases {
+            let mut input = args.clone();
+            input["task_ids"] = serde_json::json!(["t"]);
+            // A rejected input never runs, so it never waits.
+            let typed = serde_json::from_value::<TaskOutputToolInput>(input)
+                .is_ok_and(|parsed| parsed.waits());
+            assert_eq!(task_output_waits_from_json(&args), typed, "{args}");
+            assert_eq!(typed, expected, "{args}");
+        }
+    }
 
     fn result_with_status(status: &str) -> TaskOutputOutput {
         TaskOutputOutput::Result(TaskOutputResult {

@@ -44,16 +44,25 @@ pub struct CodexListDirInput {
     pub dir_path: String,
 
     /// The entry number to start listing from. Must be 1 or greater.
-    #[serde(default = "default_offset")]
+    #[serde(
+        default = "default_offset",
+        deserialize_with = "crate::types::schema::deserialize_lenient_usize"
+    )]
     #[schemars(range(min = 1))]
     pub offset: usize,
 
     /// The maximum number of entries to return.
-    #[serde(default = "default_limit")]
+    #[serde(
+        default = "default_limit",
+        deserialize_with = "crate::types::schema::deserialize_lenient_usize"
+    )]
     pub limit: usize,
 
     /// The maximum directory depth to traverse. Must be 1 or greater.
-    #[serde(default = "default_depth")]
+    #[serde(
+        default = "default_depth",
+        deserialize_with = "crate::types::schema::deserialize_lenient_usize"
+    )]
     #[schemars(range(min = 1))]
     pub depth: usize,
 }

@@ -1046,6 +1046,7 @@ pub struct VideoKeyframeInput {
     #[schemars(
         description = "Time in seconds at which the image appears, strictly inside the clip (0 < t < duration). Snapped server-side to the engine's 1/3-second keyframe grid; two anchors closer than 1/3 s are rejected."
     )]
+    #[serde(deserialize_with = "crate::types::schema::deserialize_lenient_required_f32")]
     pub timestamp_s: f32,
 }
 

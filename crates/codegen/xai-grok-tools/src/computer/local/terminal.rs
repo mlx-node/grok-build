@@ -267,6 +267,12 @@ enum TerminalCommand {
         backend_weak: std::sync::Weak<dyn crate::computer::types::TerminalBackend>,
         reply: oneshot::Sender<()>,
     },
+
+    /// Test-only: whether any task is in its detached post-exit drain.
+    #[cfg(test)]
+    AnyDraining {
+        reply: oneshot::Sender<bool>,
+    },
 }
 
 // ============================================================================
@@ -1165,6 +1171,10 @@ impl LocalTerminalActor {
                     backend_weak,
                 );
                 let _ = reply.send(());
+            }
+            #[cfg(test)]
+            TerminalCommand::AnyDraining { reply } => {
+                let _ = reply.send(self.processes.values().any(|p| p.draining));
             }
         }
     }
@@ -2505,6 +2515,20 @@ impl LocalTerminalBackend {
             tick_interval,
             ..Default::default()
         })
+    }
+
+    #[cfg(test)]
+    async fn any_draining(&self) -> bool {
+        let (reply, rx) = oneshot::channel();
+        if self
+            .cmd_tx
+            .send(TerminalCommand::AnyDraining { reply })
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        rx.await.unwrap_or(false)
     }
 
     /// Pinned to the constants rather than the env overrides (test-only).
@@ -4545,7 +4569,14 @@ mod tests {
             async move { backend.run(make_request("sleep 5 &\necho done")).await }
         });
 
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        // The kill must land while `sleep 5` holds the pipe after the shell exits.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while !backend.any_draining().await {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("command never reached its post-exit drain");
         backend.kill_foreground_commands().await;
 
         let result = run.await.unwrap().expect("run returns a result");
