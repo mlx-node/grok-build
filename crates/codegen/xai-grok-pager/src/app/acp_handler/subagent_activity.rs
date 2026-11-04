@@ -40,6 +40,25 @@ pub(super) fn sync_subagent_activity(
     info.attempt.activity_label = activity_label;
 }
 
+/// mlx-node fork: rows stamp their progress label per event, so a child whose ticks stopped is restamped here, from the animation tick.
+pub(crate) fn expire_stale_subagent_progress(parent: &mut AgentView) -> bool {
+    let expired: Vec<(String, Option<String>)> = parent
+        .subagent_views
+        .iter_mut()
+        .filter_map(|(key, child_view)| {
+            child_view
+                .session
+                .tracker
+                .expire_stale_stream_progress()
+                .then(|| (key.clone(), subagent_activity_label(child_view)))
+        })
+        .collect();
+    for (key, label) in &expired {
+        sync_subagent_activity(parent, key, label.clone());
+    }
+    !expired.is_empty()
+}
+
 /// Resolve a subagent child view's live activity into the display label [`sync_subagent_activity`] stamps.
 /// A child that is busy between activities shows "Waiting".
 pub(super) fn subagent_activity_label(child_view: &AgentView) -> Option<String> {
