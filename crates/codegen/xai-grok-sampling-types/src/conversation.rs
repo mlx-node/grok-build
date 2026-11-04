@@ -915,12 +915,14 @@ impl TurnPerfTotals {
         }
         self.prefill_input_tokens = add_count(self.prefill_input_tokens, perf.prefill_input_tokens);
         self.cached_prefix_tokens = add_count(self.cached_prefix_tokens, perf.cached_prefix_tokens);
+        // The engine's decode rate is (generated - 1) / decode time.
+        let intervals = output_tokens.saturating_sub(1);
         if let Some(rate) = finite_non_negative(perf.decode_tokens_per_second).filter(|r| *r > 0.0)
-            && output_tokens > 0
+            && intervals > 0
         {
-            let out = f64::from(output_tokens);
-            self.decode_tokens += out;
-            self.decode_secs += out / rate;
+            let intervals = f64::from(intervals);
+            self.decode_tokens += intervals;
+            self.decode_secs += intervals / rate;
         }
     }
 

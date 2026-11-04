@@ -20,17 +20,17 @@ fn close(a: Option<f64>, b: f64) {
 #[test]
 fn two_calls_are_time_and_token_weighted() {
     let mut totals = TurnPerfTotals::default();
-    // 2000 ms at 1000 tok/s = 2000 work tokens; 100 out at 50 tok/s = 2 s.
-    totals.add_call(Some(&call(2000.0, 1000.0, 50.0, 2000, 100)), 100);
-    // 500 ms at 200 tok/s = 100 work tokens; 300 out at 100 tok/s = 3 s.
-    totals.add_call(Some(&call(500.0, 200.0, 100.0, 100, 4000)), 300);
+    // 2000 ms at 1000 tok/s = 2000 work tokens; 100 intervals at 50 tok/s = 2 s.
+    totals.add_call(Some(&call(2000.0, 1000.0, 50.0, 2000, 100)), 101);
+    // 500 ms at 200 tok/s = 100 work tokens; 300 intervals at 100 tok/s = 3 s.
+    totals.add_call(Some(&call(500.0, 200.0, 100.0, 100, 4000)), 301);
     let perf = totals.finish().expect("perf");
     close(perf.ttft_ms, 2000.0);
     close(perf.prefill_ms, 2500.0);
     // 2100 work tokens / 2.5 s.
     close(perf.prefill_tokens_per_second, 840.0);
     close(perf.prefill_work_tokens(), 2100.0);
-    // 400 out / 5 s.
+    // 400 intervals / 5 s.
     close(perf.decode_tokens_per_second, 80.0);
     assert_eq!(perf.prefill_input_tokens, Some(2100));
     assert_eq!(perf.cached_prefix_tokens, Some(4100));
@@ -82,6 +82,24 @@ fn calls_missing_fields_are_skipped_per_field() {
     close(perf.decode_tokens_per_second, 50.0);
     assert_eq!(perf.prefill_input_tokens, Some(600));
     assert_eq!(perf.cached_prefix_tokens, Some(0));
+}
+
+#[test]
+fn decode_total_uses_the_engines_interval_basis() {
+    let decode = |tps: f64| TurnPerf {
+        decode_tokens_per_second: Some(tps),
+        ..Default::default()
+    };
+    let mut totals = TurnPerfTotals::default();
+    // 1 interval at 1 tok/s = 1 s; 100 intervals at 100 tok/s = 1 s.
+    totals.add_call(Some(&decode(1.0)), 2);
+    totals.add_call(Some(&decode(100.0)), 101);
+    // A single token has no decode interval.
+    totals.add_call(Some(&decode(0.5)), 1);
+    close(
+        totals.finish().and_then(|p| p.decode_tokens_per_second),
+        50.5,
+    );
 }
 
 #[test]
