@@ -762,6 +762,17 @@ impl AcpUpdateTracker {
         }
         format_stream_progress(progress, age, with_eta)
     }
+    /// mlx-node fork: drop a stale tick; `true` when one was dropped.
+    pub fn expire_stale_stream_progress(&mut self) -> bool {
+        let stale = self
+            .stream_progress
+            .as_ref()
+            .is_some_and(|(_, at)| at.elapsed() >= STREAM_PROGRESS_STALE_AFTER);
+        if stale {
+            self.stream_progress = None;
+        }
+        stale
+    }
     /// Backdate the progress tick (staleness / ETA tests).
     #[cfg(test)]
     pub(crate) fn backdate_stream_progress(&mut self, age: std::time::Duration) {

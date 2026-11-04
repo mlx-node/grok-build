@@ -845,6 +845,55 @@
         assert_eq!(label(&app), None, "a finished row must not be restamped");
     }
 
+    // mlx-node fork: a child whose ticks stop loses its progress label on the animation tick.
+    #[test]
+    fn stale_child_progress_expires_without_a_new_event() {
+        use xai_grok_shell::extensions::notification::{StreamProgress, StreamProgressPhase};
+        let decode = StreamProgress {
+            phase: Some(StreamProgressPhase::Decode),
+            generated_tokens: Some(84),
+            decode_tokens_per_second: Some(49.8),
+            ..Default::default()
+        };
+        let child_sid = "child-progress-stale";
+        let mut app = make_app_with_agent("sess-parent");
+        let _ = handle(
+            make_ext_session_notification("sess-parent", test_subagent_spawned("sess-parent", child_sid)),
+            &mut app,
+        );
+        let _ = handle(make_agent_chunk_with_event(child_sid, "child text", "p-child", None), &mut app);
+        let label = |app: &AppView| {
+            let agent = app.agents.get(&AgentId(0)).unwrap();
+            let info = agent.subagent_sessions.get(child_sid).unwrap();
+            let entry = agent.scrollback.get_by_id(info.attempt.scrollback_entry_id.unwrap()).unwrap();
+            let RenderBlock::Subagent(sb) = &entry.block else {
+                panic!("expected Subagent block");
+            };
+            assert_eq!(sb.activity_label, info.attempt.activity_label);
+            info.attempt.activity_label.clone()
+        };
+        assert!(handle(
+            make_ext_session_notification(child_sid, XaiSessionUpdate::StreamProgress { progress: decode }),
+            &mut app
+        ));
+        assert_eq!(label(&app).as_deref(), Some("Responding · 84 tok · 49.8 tok/s"));
+
+        let _ = app.tick();
+        assert_eq!(label(&app).as_deref(), Some("Responding · 84 tok · 49.8 tok/s"), "a fresh tick stays");
+
+        app.agents
+            .get_mut(&AgentId(0))
+            .unwrap()
+            .subagent_views
+            .get_mut(child_sid)
+            .unwrap()
+            .session
+            .tracker
+            .backdate_stream_progress(crate::acp::tracker::STREAM_PROGRESS_STALE_AFTER);
+        assert!(app.tick(), "expiring a label must redraw");
+        assert_eq!(label(&app).as_deref(), Some("Responding"));
+    }
+
     #[test]
     fn a_write_tool_call_labels_a_live_child_only() {
         enum Case {
