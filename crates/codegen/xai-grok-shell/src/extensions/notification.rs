@@ -8,6 +8,8 @@ pub use crate::session::goal_tracker::GoalClassifierVerdict;
 // mlx-node fork: the session-update wire shape carries per-response perf counters;
 // clients (the pager) name the type through this crate.
 pub use xai_grok_sampling_types::TurnPerf;
+// mlx-node fork: live prefill/decode progress from the local MLX server's keepalive ping.
+pub use xai_grok_sampling_types::{StreamProgress, StreamProgressPhase};
 
 /// Retained for wire backwards compatibility; always empty in the simplified goal model (no deliverables).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1169,6 +1171,9 @@ pub enum SessionUpdate {
         #[serde(default)]
         cache_creation_input_tokens: u64,
     },
+    /// mlx-node fork: live prefill/decode progress the local MLX server rides on the keepalive ping (~10 s cadence).
+    /// Rides the buffered chunk rail so it stays ordered with this response's chunks; never persisted.
+    StreamProgress { progress: StreamProgress },
     /// This response's reasoning (thinking) block finished; carries its encrypted signature. Rides the buffered chunk rail so it is ordered right AFTER this response's thought chunks (and before its text).
     /// Headless partial-mode framing consumes it to emit `signature_delta` before the thinking block's `content_block_stop`, in order. Messages backend only.
     ReasoningCompleted {
