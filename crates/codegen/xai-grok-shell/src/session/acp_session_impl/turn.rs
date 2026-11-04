@@ -4507,11 +4507,11 @@ mod last_sample_span_tests {
         };
         let mut turn = super::TurnSampling::default();
         let mut round = TurnSpanTotals::default();
-        round.record(&span, &with_perf(100, 2000.0, 1000.0, 50.0));
+        round.record(&span, &with_perf(101, 2000.0, 1000.0, 50.0));
         round.record(&span, &sample(Some(StopReason::ToolCalls), true, 9));
         turn.fold(round);
         let mut round = TurnSpanTotals::default();
-        round.record(&span, &with_perf(300, 500.0, 200.0, 100.0));
+        round.record(&span, &with_perf(301, 500.0, 200.0, 100.0));
         turn.fold(round);
         let perf = turn.perf.finish().expect("perf");
         assert_eq!(perf.ttft_ms, Some(2000.0));
