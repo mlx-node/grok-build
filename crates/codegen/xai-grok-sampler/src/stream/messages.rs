@@ -12,7 +12,7 @@ use futures_util::stream::{BoxStream, Stream};
 use xai_grok_sampling_types::messages::{self, MessageStreamEvent};
 use xai_grok_sampling_types::{
     AssistantItem, ConversationItem, ConversationResponse, ResponseModelMetadata, SamplingError,
-    StopReason, TokenUsage, ToolCall, rs,
+    StopReason, StreamProgress, StreamProgressPhase, TokenUsage, ToolCall, rs,
 };
 
 use crate::events::{SamplingChannel, SamplingErrorInfo, SamplingEvent};
@@ -20,10 +20,9 @@ use crate::metrics::InferenceLatencyStats;
 use crate::types::RequestId;
 
 /// Returns whether a Messages API event reflects real model progress rather than a liveness-only heartbeat (Ping).
-/// mlx-node fork: a ping carrying `mlx_progress` counts, so a prefill longer than the idle timeout stays alive.
 pub(crate) fn messages_event_has_meaningful_content(event: &MessageStreamEvent) -> bool {
     match event {
-        MessageStreamEvent::Ping { mlx_progress } => mlx_progress.is_some(),
+        MessageStreamEvent::Ping { .. } => false,
         MessageStreamEvent::MessageStart { .. }
         | MessageStreamEvent::MessageDelta { .. }
         | MessageStreamEvent::MessageStop
@@ -31,6 +30,49 @@ pub(crate) fn messages_event_has_meaningful_content(event: &MessageStreamEvent) 
         | MessageStreamEvent::ContentBlockDelta { .. }
         | MessageStreamEvent::ContentBlockStop { .. }
         | MessageStreamEvent::Error { .. } => true,
+    }
+}
+
+/// mlx-node fork: high-water marks of one request's `mlx_progress`. The server's ping timer keeps sending snapshots
+/// while inference stalls, so only a snapshot that moves a mark forward may reset the idle check.
+#[derive(Default)]
+struct ProgressMarks {
+    phase_rank: Option<u8>,
+    prefill_done: Option<u32>,
+    generated_tokens: Option<u32>,
+    prefill_total_known: bool,
+    cached_tokens_known: bool,
+}
+
+impl ProgressMarks {
+    fn advance(&mut self, progress: &StreamProgress) -> bool {
+        fn raise<T: PartialOrd + Copy>(mark: &mut Option<T>, value: Option<T>) -> bool {
+            match value {
+                Some(v) if mark.is_none_or(|m| v > m) => {
+                    *mark = Some(v);
+                    true
+                }
+                _ => false,
+            }
+        }
+        let phase_rank = progress.phase.and_then(|phase| match phase {
+            StreamProgressPhase::Queued => Some(0),
+            StreamProgressPhase::Prefill => Some(1),
+            StreamProgressPhase::Decode => Some(2),
+            StreamProgressPhase::Unknown => None,
+        });
+        let mut advanced = raise(&mut self.phase_rank, phase_rank);
+        advanced |= raise(&mut self.prefill_done, progress.prefill_done);
+        advanced |= raise(&mut self.generated_tokens, progress.generated_tokens);
+        if progress.prefill_total.is_some() && !self.prefill_total_known {
+            self.prefill_total_known = true;
+            advanced = true;
+        }
+        if progress.cached_tokens.is_some() && !self.cached_tokens_known {
+            self.cached_tokens_known = true;
+            advanced = true;
+        }
+        advanced
     }
 }
 
@@ -123,6 +165,7 @@ pub fn stream_messages<'a>(
         let mut message_chunk_count: u64 = 0;
         let mut first_token_emitted = false;
         let mut last_content_chunk_at = Instant::now();
+        let mut progress_marks = ProgressMarks::default(); // mlx-node fork
 
         // Tool-call index counter for per-tool deltas (separate from the block index, which can be interleaved with text/thinking blocks)
         let mut next_tool_index: u32 = 0;
@@ -156,7 +199,14 @@ pub fn stream_messages<'a>(
                 }
             };
 
-            let event_has_content = messages_event_has_meaningful_content(&event);
+            // mlx-node fork: only advancing progress resets the idle check
+
+            let event_has_content = match &event {
+                MessageStreamEvent::Ping { mlx_progress: Some(progress) } => {
+                    progress_marks.advance(progress)
+                }
+                _ => messages_event_has_meaningful_content(&event),
+            };
 
             match event {
                 MessageStreamEvent::MessageStart { message } => {
