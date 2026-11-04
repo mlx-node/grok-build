@@ -1484,3 +1484,67 @@ async fn reasoning_only_doomloop_turn_captures_every_generation_as_segments() {
         })
         .await;
 }
+
+/// mlx-node fork: an owned `StreamProgress` rides the buffered xAI rail in FIFO order with the response's chunks.
+/// An unowned one (a stale request) is dropped.
+#[tokio::test(flavor = "current_thread")]
+async fn stream_progress_rides_buffered_xai_rail_in_order() {
+    use crate::extensions::notification::{StreamProgress, StreamProgressPhase};
+    use xai_grok_sampler::{RequestId, SamplingChannel, SamplingEvent};
+
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let mut fixture = make_replay_send_update_fixture().await;
+            let actor = Arc::new(fixture.actor);
+            let progress = StreamProgress {
+                phase: Some(StreamProgressPhase::Prefill),
+                prefill_total: Some(20_700),
+                prefill_done: Some(12_300),
+                prefill_tokens_per_second: Some(571.2),
+                ..Default::default()
+            };
+
+            actor
+                .handle_sampling_event(SamplingEvent::StreamProgress {
+                    request_id: RequestId::random(),
+                    progress,
+                })
+                .await;
+            assert!(
+                fixture.event_rx.try_recv().is_err(),
+                "unowned progress must not reach the client queue"
+            );
+
+            let req = RequestId::random();
+            own_request(&actor, &req);
+            actor
+                .handle_sampling_event(SamplingEvent::StreamProgress {
+                    request_id: req.clone(),
+                    progress,
+                })
+                .await;
+            actor
+                .handle_sampling_event(SamplingEvent::ChannelToken {
+                    request_id: req,
+                    channel: SamplingChannel::Text,
+                    text: "hi".to_string(),
+                    chunk_index: 0,
+                })
+                .await;
+
+            let first = fixture.event_rx.try_recv().expect("progress enqueued");
+            let SessionEvent::Notification(SessionNotification::Xai(n)) = first else {
+                panic!("expected buffered xAI notification first, got {first:?}");
+            };
+            assert!(n.meta.is_none(), "buffered rail carries no event_seq");
+            assert_eq!(n.update, XaiSessionUpdate::StreamProgress { progress });
+
+            let second = fixture.event_rx.try_recv().expect("chunk enqueued");
+            let SessionEvent::Notification(SessionNotification::Acp(n)) = second else {
+                panic!("expected ACP chunk after progress, got {second:?}");
+            };
+            assert!(matches!(n.update, acp::SessionUpdate::AgentMessageChunk(_)));
+        })
+        .await;
+}
