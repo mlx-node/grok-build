@@ -786,6 +786,65 @@
         );
     }
 
+    // mlx-node fork: each subagent row shows its own child's `mlx_progress`.
+    #[test]
+    fn stream_progress_labels_a_live_child_row() {
+        use xai_grok_shell::extensions::notification::{StreamProgress, StreamProgressPhase};
+        let tick = |progress: StreamProgress| XaiSessionUpdate::StreamProgress { progress };
+        let prefill = StreamProgress {
+            phase: Some(StreamProgressPhase::Prefill),
+            prefill_done: Some(12_300),
+            prefill_total: Some(20_700),
+            prefill_tokens_per_second: Some(571.2),
+            ..Default::default()
+        };
+        let decode = StreamProgress {
+            phase: Some(StreamProgressPhase::Decode),
+            generated_tokens: Some(84),
+            decode_tokens_per_second: Some(49.8),
+            ..Default::default()
+        };
+        let child_sid = "child-progress";
+        let mut app = make_app_with_agent("sess-parent");
+        let _ = handle(
+            make_ext_session_notification("sess-parent", test_subagent_spawned("sess-parent", child_sid)),
+            &mut app,
+        );
+        let label = |app: &AppView| {
+            let agent = app.agents.get(&AgentId(0)).unwrap();
+            let info = agent.subagent_sessions.get(child_sid).unwrap();
+            let entry = agent.scrollback.get_by_id(info.attempt.scrollback_entry_id.unwrap()).unwrap();
+            let RenderBlock::Subagent(sb) = &entry.block else {
+                panic!("expected Subagent block");
+            };
+            assert_eq!(sb.activity_label, info.attempt.activity_label);
+            info.attempt.activity_label.clone()
+        };
+
+        assert!(handle(make_ext_session_notification(child_sid, tick(prefill)), &mut app));
+        assert_eq!(label(&app).as_deref(), Some("Prefill 12.3k/20.7k · 571 tok/s"));
+        assert!(
+            app.agents.get(&AgentId(0)).unwrap().session.tracker.stream_progress_short_label().is_none(),
+            "a child's tick must not reach the parent's tracker"
+        );
+
+        let _ = handle(make_agent_chunk_with_event(child_sid, "child text", "p-child", None), &mut app);
+        assert_eq!(label(&app).as_deref(), Some("Responding"), "the first chunk ends the prefill label");
+
+        assert!(handle(make_ext_session_notification(child_sid, tick(decode)), &mut app));
+        assert_eq!(label(&app).as_deref(), Some("Responding · 84 tok · 49.8 tok/s"));
+
+        let _ = handle(
+            make_ext_session_notification("sess-parent", test_subagent_finished(child_sid)),
+            &mut app,
+        );
+        assert!(
+            !handle(make_ext_session_notification(child_sid, tick(decode)), &mut app),
+            "a tick after finish must not redraw"
+        );
+        assert_eq!(label(&app), None, "a finished row must not be restamped");
+    }
+
     #[test]
     fn a_write_tool_call_labels_a_live_child_only() {
         enum Case {

@@ -541,6 +541,11 @@ pub fn resolve_turn_activity(v: &AgentView) -> Option<TurnActivity> {
     v.resolve_turn_activity()
 }
 
+/// mlx-node fork: live prefill/decode progress for the turn-status row.
+pub fn stream_progress_label(v: &AgentView) -> Option<crate::acp::tracker::StreamProgressLabel> {
+    v.session.tracker.stream_progress_label()
+}
+
 /// [`AgentView::renders_parked`].
 pub fn renders_parked(v: &AgentView) -> bool {
     v.renders_parked()
