@@ -20,9 +20,10 @@ use crate::metrics::InferenceLatencyStats;
 use crate::types::RequestId;
 
 /// Returns whether a Messages API event reflects real model progress rather than a liveness-only heartbeat (Ping).
+/// mlx-node fork: a ping carrying `mlx_progress` counts, so a prefill longer than the idle timeout stays alive.
 pub(crate) fn messages_event_has_meaningful_content(event: &MessageStreamEvent) -> bool {
     match event {
-        MessageStreamEvent::Ping => false,
+        MessageStreamEvent::Ping { mlx_progress } => mlx_progress.is_some(),
         MessageStreamEvent::MessageStart { .. }
         | MessageStreamEvent::MessageDelta { .. }
         | MessageStreamEvent::MessageStop
@@ -483,8 +484,15 @@ pub fn stream_messages<'a>(
                     // Final message complete; the loop exits naturally when the underlying stream ends
                 }
 
-                MessageStreamEvent::Ping => {
+                MessageStreamEvent::Ping { mlx_progress } => {
                     // Liveness only, no action; the inner timeout was already reset above by the successful `next()`
+                    // mlx-node fork: forward the local MLX server's live progress
+                    if let Some(progress) = mlx_progress {
+                        yield SamplingEvent::StreamProgress {
+                            request_id: request_id.clone(),
+                            progress,
+                        };
+                    }
                 }
 
                 MessageStreamEvent::Error { error } => {
