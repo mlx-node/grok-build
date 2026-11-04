@@ -5384,3 +5384,163 @@ fn hook_gate_survives_a_text_chunk_stamped_before_the_batch() {
         Some(TurnActivity::Waiting(WaitingReason::Hooks { .. }))
     ));
 }
+// mlx-node fork: live `mlx_progress` ticks.
+fn progress(
+    phase: xai_grok_shell::extensions::notification::StreamProgressPhase,
+) -> xai_grok_shell::extensions::notification::StreamProgress {
+    xai_grok_shell::extensions::notification::StreamProgress {
+        phase: Some(phase),
+        ..Default::default()
+    }
+}
+fn prefill_progress() -> xai_grok_shell::extensions::notification::StreamProgress {
+    xai_grok_shell::extensions::notification::StreamProgress {
+        prefill_done: Some(12_300),
+        prefill_total: Some(20_700),
+        prefill_tokens_per_second: Some(571.2),
+        ..progress(xai_grok_shell::extensions::notification::StreamProgressPhase::Prefill)
+    }
+}
+fn decode_progress() -> xai_grok_shell::extensions::notification::StreamProgress {
+    xai_grok_shell::extensions::notification::StreamProgress {
+        generated_tokens: Some(84),
+        decode_tokens_per_second: Some(49.83),
+        ..progress(xai_grok_shell::extensions::notification::StreamProgressPhase::Decode)
+    }
+}
+#[test]
+fn stream_progress_prefill_label_counts_down_eta() {
+    let mut tracker = AcpUpdateTracker::new();
+    assert_eq!(tracker.stream_progress_label(), None);
+    tracker.set_stream_progress(prefill_progress());
+    // (20_700 - 12_300) / 571.2 = 14.7 s.
+    assert_eq!(
+        tracker.stream_progress_label(),
+        Some(StreamProgressLabel::Replace(
+            "Prefill 12.3k/20.7k · 571 tok/s · ~15 s left".into()
+        ))
+    );
+    assert_eq!(
+        tracker.stream_progress_short_label(),
+        Some(StreamProgressLabel::Replace(
+            "Prefill 12.3k/20.7k · 571 tok/s".into()
+        ))
+    );
+    tracker.backdate_stream_progress(std::time::Duration::from_secs(10));
+    assert_eq!(
+        tracker.stream_progress_label(),
+        Some(StreamProgressLabel::Replace(
+            "Prefill 12.3k/20.7k · 571 tok/s · ~5 s left".into()
+        ))
+    );
+    tracker.backdate_stream_progress(std::time::Duration::from_secs(20));
+    assert_eq!(
+        tracker.stream_progress_label(),
+        Some(StreamProgressLabel::Replace(
+            "Prefill 12.3k/20.7k · 571 tok/s · ~0 s left".into()
+        )),
+        "the ETA floors at 0 instead of going negative"
+    );
+}
+#[test]
+fn stream_progress_prefill_without_rate_omits_eta() {
+    let mut tracker = AcpUpdateTracker::new();
+    tracker.set_stream_progress(xai_grok_shell::extensions::notification::StreamProgress {
+        prefill_tokens_per_second: None,
+        ..prefill_progress()
+    });
+    assert_eq!(
+        tracker.stream_progress_label(),
+        Some(StreamProgressLabel::Replace("Prefill 12.3k/20.7k".into()))
+    );
+}
+#[test]
+fn stream_progress_decode_and_queued_labels() {
+    use xai_grok_shell::extensions::notification::StreamProgressPhase;
+    let mut tracker = AcpUpdateTracker::new();
+    tracker.set_stream_progress(decode_progress());
+    assert_eq!(
+        tracker.stream_progress_label(),
+        Some(StreamProgressLabel::Suffix(" · 84 tok · 49.8 tok/s".into()))
+    );
+    tracker.set_stream_progress(progress(StreamProgressPhase::Queued));
+    assert_eq!(
+        tracker.stream_progress_label(),
+        Some(StreamProgressLabel::Replace("Queued for model".into()))
+    );
+    tracker.set_stream_progress(progress(StreamProgressPhase::Unknown));
+    assert_eq!(tracker.stream_progress_label(), None);
+}
+#[test]
+fn stream_progress_goes_stale() {
+    let mut tracker = AcpUpdateTracker::new();
+    tracker.set_stream_progress(decode_progress());
+    tracker.backdate_stream_progress(STREAM_PROGRESS_STALE_AFTER);
+    assert_eq!(tracker.stream_progress_label(), None);
+    assert_eq!(tracker.stream_progress_short_label(), None);
+}
+#[test]
+fn stream_progress_prefill_cleared_by_first_chunk_decode_kept() {
+    let mut sb = ScrollbackState::new();
+    let mut tracker = AcpUpdateTracker::new();
+    tracker.set_stream_progress(prefill_progress());
+    tracker.handle_update(thought_chunk("hmm"), &meta(), &mut sb);
+    assert_eq!(tracker.stream_progress_label(), None);
+    tracker.set_stream_progress(decode_progress());
+    tracker.handle_update(agent_chunk("hi"), &meta(), &mut sb);
+    assert_eq!(tracker.activity(), Some(TurnActivity::Responding));
+    assert_eq!(
+        tracker.stream_progress_label(),
+        Some(StreamProgressLabel::Suffix(" · 84 tok · 49.8 tok/s".into()))
+    );
+}
+#[test]
+fn stream_progress_cleared_by_tool_call_and_finish_turn() {
+    let mut sb = ScrollbackState::new();
+    let mut tracker = AcpUpdateTracker::new();
+    tracker.set_stream_progress(decode_progress());
+    tracker.handle_update(
+        tool_call("t2", acp::ToolKind::Read, "Read bar.rs"),
+        &meta(),
+        &mut sb,
+    );
+    tracker.handle_update(tool_update_completed("t2"), &meta(), &mut sb);
+    assert_eq!(tracker.activity(), None);
+    assert_eq!(
+        tracker.stream_progress_label(),
+        None,
+        "the ToolCall ended the request that ticked"
+    );
+    tracker.set_stream_progress(prefill_progress());
+    tracker.finish_turn(&mut sb);
+    assert_eq!(tracker.stream_progress_label(), None);
+}
+#[test]
+fn stream_progress_hidden_behind_tool_retry_and_writing() {
+    let mut sb = ScrollbackState::new();
+    let mut tracker = AcpUpdateTracker::new();
+    tracker.handle_update(
+        tool_call("t1", acp::ToolKind::Read, "Read foo.rs"),
+        &meta(),
+        &mut sb,
+    );
+    tracker.set_stream_progress(prefill_progress());
+    assert!(matches!(
+        tracker.activity(),
+        Some(TurnActivity::ToolRunning { .. })
+    ));
+    assert_eq!(tracker.stream_progress_label(), None);
+    let mut tracker = AcpUpdateTracker::new();
+    tracker.set_stream_progress(prefill_progress());
+    tracker.set_retry_activity(Some(TurnActivity::Retrying {
+        attempt: 1,
+        max_retries: 3,
+        reason: "overloaded".into(),
+        error_type: None,
+    }));
+    assert_eq!(tracker.stream_progress_label(), None);
+    tracker.set_retry_activity(None);
+    tracker.set_stream_progress(decode_progress());
+    tracker.note_tool_call_arguments_delta(Some("write"), 0);
+    assert_eq!(tracker.stream_progress_label(), None);
+}

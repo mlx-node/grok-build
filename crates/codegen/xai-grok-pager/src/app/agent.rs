@@ -927,6 +927,13 @@ impl AgentSession {
     pub fn set_retry_activity(&mut self, activity: Option<TurnActivity>) {
         self.tracker.set_retry_activity(activity);
     }
+    /// mlx-node fork: record a live `mlx_progress` tick from the local MLX server.
+    pub fn set_stream_progress(
+        &mut self,
+        progress: xai_grok_shell::extensions::notification::StreamProgress,
+    ) {
+        self.tracker.set_stream_progress(progress);
+    }
     /// Start a slash command (e.g., /compact).
     pub fn start_command(&mut self, command: AgentCommand) {
         self.state = AgentState::CommandRunning {

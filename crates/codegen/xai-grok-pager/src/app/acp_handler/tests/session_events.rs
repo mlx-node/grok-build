@@ -1244,6 +1244,53 @@
         assert_eq!(writing.label(), "Writing subagent prompt…");
     }
 
+    // mlx-node fork: live `mlx_progress` ticks on the root session.
+    fn prefill_stream_progress() -> XaiSessionUpdate {
+        use xai_grok_shell::extensions::notification::{StreamProgress, StreamProgressPhase};
+        XaiSessionUpdate::StreamProgress {
+            progress: StreamProgress {
+                phase: Some(StreamProgressPhase::Prefill),
+                prefill_done: Some(12_300),
+                prefill_total: Some(20_700),
+                prefill_tokens_per_second: Some(571.2),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn stream_progress_sets_root_label_while_turn_runs() {
+        use crate::acp::tracker::StreamProgressLabel;
+        let mut app = make_app_with_agent("sess-1");
+        app.agents.get_mut(&AgentId(0)).unwrap().session.state = AgentState::TurnRunning;
+
+        let changed = handle(make_ext_session_notification("sess-1", prefill_stream_progress()), &mut app);
+        assert!(changed, "a progress tick must redraw");
+        let agent = app.agents.get(&AgentId(0)).unwrap();
+        assert_eq!(
+            agent.session.tracker.stream_progress_short_label(),
+            Some(StreamProgressLabel::Replace("Prefill 12.3k/20.7k · 571 tok/s".into()))
+        );
+    }
+
+    #[test]
+    fn stream_progress_ignored_when_idle_or_reloading() {
+        for reloading in [false, true] {
+            let mut app = make_app_with_agent("sess-1");
+            {
+                let agent = app.agents.get_mut(&AgentId(0)).unwrap();
+                if reloading {
+                    agent.session.state = AgentState::TurnRunning;
+                    agent.session.loading_replay = true;
+                }
+            }
+            let changed = handle(make_ext_session_notification("sess-1", prefill_stream_progress()), &mut app);
+            assert!(!changed, "reloading={reloading}");
+            let agent = app.agents.get(&AgentId(0)).unwrap();
+            assert_eq!(agent.session.tracker.stream_progress_short_label(), None, "reloading={reloading}");
+        }
+    }
+
     /// A delta-first turn still counts as first activity: the rewind stash drops and the TTFA timestamp is stamped.
     #[test]
     fn tool_call_delta_chunk_clears_in_flight_prompt() {

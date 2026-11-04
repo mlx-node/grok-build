@@ -335,6 +335,19 @@ pub(super) fn handle_session_notification_with_origin(
                 changed
             }
         }
+        // mlx-node fork: live prefill/decode progress from the local MLX server's ping.
+        XaiSessionUpdate::StreamProgress { progress } => {
+            if meta.is_replay
+                || agent.session.loading_replay
+                || agent.running_wake_turn.is_some()
+                || !matches!(agent.session.state, AgentState::TurnRunning)
+            {
+                false
+            } else {
+                agent.session.set_stream_progress(progress);
+                true
+            }
+        }
         XaiSessionUpdate::TurnCompleted {
             prompt_id,
             stop_reason,
@@ -1529,6 +1542,26 @@ pub(super) fn handle_child_session_notification(
             {
                 return false;
             }
+            let activity_label = subagent_activity_label(child_view);
+            sync_subagent_activity(agent, child_sid, activity_label);
+            true
+        }
+        // mlx-node fork: each subagent row shows its own child's prefill/decode progress.
+        XaiSessionUpdate::StreamProgress { progress } => {
+            let Some(child_view) = agent.subagent_views.get_mut(child_sid) else {
+                return false;
+            };
+            if child_view.session.loading_replay {
+                return false;
+            }
+            let row_live = agent
+                .subagent_sessions
+                .get(child_sid)
+                .is_some_and(|info| info.is_running());
+            if !row_live {
+                return false;
+            }
+            child_view.session.set_stream_progress(progress);
             let activity_label = subagent_activity_label(child_view);
             sync_subagent_activity(agent, child_sid, activity_label);
             true

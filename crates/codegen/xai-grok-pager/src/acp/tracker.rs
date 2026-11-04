@@ -226,6 +226,84 @@ impl WritingToolCall {
         }
     }
 }
+/// mlx-node fork: the server ticks every 10 s; a value this old means the ticks stopped (request ended or stalled).
+pub(crate) const STREAM_PROGRESS_STALE_AFTER: std::time::Duration =
+    std::time::Duration::from_secs(25);
+/// mlx-node fork: how a live `mlx_progress` tick changes the turn-status label.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamProgressLabel {
+    /// Shown instead of the activity label (queued, prefill).
+    Replace(String),
+    /// Appended after the activity label (decode), e.g. `" · 84 tok · 49.8 tok/s"`.
+    Suffix(String),
+}
+/// mlx-node fork: `~15 s left` / `~2 min 5 s left`.
+fn format_eta(secs: u64) -> String {
+    if secs < 60 {
+        format!("~{secs} s left")
+    } else {
+        format!("~{} min {} s left", secs / 60, secs % 60)
+    }
+}
+/// mlx-node fork: the label for one progress tick received `age` ago; `with_eta` adds the counting-down prefill ETA.
+pub(crate) fn format_stream_progress(
+    progress: &xai_grok_shell::extensions::notification::StreamProgress,
+    age: std::time::Duration,
+    with_eta: bool,
+) -> Option<StreamProgressLabel> {
+    use crate::views::agent_status::format_tokens_compact;
+    use std::fmt::Write as _;
+    use xai_grok_shell::extensions::notification::StreamProgressPhase;
+    let rate = |r: Option<f64>| r.filter(|r| r.is_finite() && *r > 0.0);
+    match progress.phase? {
+        StreamProgressPhase::Queued => {
+            Some(StreamProgressLabel::Replace("Queued for model".to_string()))
+        }
+        StreamProgressPhase::Prefill => {
+            let mut label = "Prefill".to_string();
+            match (progress.prefill_done, progress.prefill_total) {
+                (Some(done), Some(total)) => {
+                    let _ = write!(
+                        label,
+                        " {}/{}",
+                        format_tokens_compact(i64::from(done)),
+                        format_tokens_compact(i64::from(total))
+                    );
+                }
+                (Some(done), None) => {
+                    let _ = write!(label, " {}", format_tokens_compact(i64::from(done)));
+                }
+                (None, Some(total)) => {
+                    let _ = write!(label, " ?/{}", format_tokens_compact(i64::from(total)));
+                }
+                (None, None) => {}
+            }
+            if let Some(tps) = rate(progress.prefill_tokens_per_second) {
+                let _ = write!(label, " · {tps:.0} tok/s");
+                if with_eta
+                    && let (Some(done), Some(total)) =
+                        (progress.prefill_done, progress.prefill_total)
+                {
+                    let remaining = f64::from(total.saturating_sub(done)) / tps;
+                    let left = (remaining - age.as_secs_f64()).max(0.0);
+                    let _ = write!(label, " · {}", format_eta(left.ceil() as u64));
+                }
+            }
+            Some(StreamProgressLabel::Replace(label))
+        }
+        StreamProgressPhase::Decode => {
+            let mut suffix = String::new();
+            if let Some(n) = progress.generated_tokens {
+                let _ = write!(suffix, " · {} tok", format_tokens_compact(i64::from(n)));
+            }
+            if let Some(tps) = rate(progress.decode_tokens_per_second) {
+                let _ = write!(suffix, " · {tps:.1} tok/s");
+            }
+            (!suffix.is_empty()).then_some(StreamProgressLabel::Suffix(suffix))
+        }
+        StreamProgressPhase::Unknown => None,
+    }
+}
 /// Cap on remembered per-index tool names per sample (model-driven input).
 const MAX_WRITING_TOOL_NAMES: usize = 64;
 /// `strings`-greppable marker proving a binary carries the mid-turn wait-status handling (kept by `#[used]`).
@@ -416,6 +494,12 @@ pub struct AcpUpdateTracker {
     /// Set by `set_retry_activity()` from ExtNotification `RetryState::Retrying`.
     /// Auto-cleared when normal streaming data resumes (in `handle_update` and `note_tool_call_arguments_delta`) and on `finish_turn()`.
     retry_activity: Option<TurnActivity>,
+    /// mlx-node fork: last `mlx_progress` tick and when it arrived. Cleared on a canonical `ToolCall` (that request's
+    /// sampling is over), on the first text/thought chunk when it is a queued/prefill tick, and on `finish_turn()`.
+    stream_progress: Option<(
+        xai_grok_shell::extensions::notification::StreamProgress,
+        std::time::Instant,
+    )>,
     /// The awaited hook batch the turn is blocked on; ended by its `HookExecution`, resumed model text, or turn end.
     hooks_running: Option<HooksRunning>,
     /// Set per `ToolCallDeltaChunk` (streaming-only, never persisted, cannot replay).
@@ -647,6 +731,43 @@ impl AcpUpdateTracker {
     /// Auto-cleared when normal streaming data resumes (in `handle_update` and `note_tool_call_arguments_delta`) and on `finish_turn()`.
     pub fn set_retry_activity(&mut self, activity: Option<TurnActivity>) {
         self.retry_activity = activity;
+    }
+    /// mlx-node fork: record a live `mlx_progress` tick.
+    pub fn set_stream_progress(
+        &mut self,
+        progress: xai_grok_shell::extensions::notification::StreamProgress,
+    ) {
+        self.stream_progress = Some((progress, std::time::Instant::now()));
+    }
+    /// mlx-node fork: the turn-status progress label, with the prefill ETA counting down since the tick arrived.
+    pub fn stream_progress_label(&self) -> Option<StreamProgressLabel> {
+        self.fresh_stream_progress(true)
+    }
+    /// mlx-node fork: the subagent-row form: no ETA, since rows are stamped per update and would not count down.
+    pub fn stream_progress_short_label(&self) -> Option<StreamProgressLabel> {
+        self.fresh_stream_progress(false)
+    }
+    /// mlx-node fork: `None` once the tick is stale or while the activity is anything but model streaming/waiting.
+    fn fresh_stream_progress(&self, with_eta: bool) -> Option<StreamProgressLabel> {
+        let (progress, at) = self.stream_progress.as_ref()?;
+        let age = at.elapsed();
+        if age >= STREAM_PROGRESS_STALE_AFTER {
+            return None;
+        }
+        if !matches!(
+            self.activity(),
+            None | Some(TurnActivity::Thinking | TurnActivity::Responding)
+        ) {
+            return None;
+        }
+        format_stream_progress(progress, age, with_eta)
+    }
+    /// Backdate the progress tick (staleness / ETA tests).
+    #[cfg(test)]
+    pub(crate) fn backdate_stream_progress(&mut self, age: std::time::Duration) {
+        if let Some((_, at)) = &mut self.stream_progress {
+            *at = std::time::Instant::now() - age;
+        }
     }
     /// Record the awaited batch from `HookRunStarted`; the spinner shows it after [`HOOK_REVEAL_DELAY`].
     pub fn set_hooks_running(
@@ -962,6 +1083,18 @@ impl AcpUpdateTracker {
         {
             self.hooks_running = None;
         }
+        // mlx-node fork: a queued/prefill tick is over once the model streams; a decode tick stays until the next one.
+        if matches!(
+            update,
+            acp::SessionUpdate::AgentMessageChunk(_) | acp::SessionUpdate::AgentThoughtChunk(_)
+        ) && self.stream_progress.as_ref().is_some_and(|(p, _)| {
+            !matches!(
+                p.phase,
+                Some(xai_grok_shell::extensions::notification::StreamProgressPhase::Decode)
+            )
+        }) {
+            self.stream_progress = None;
+        }
         if let Some(new_start) = meta.stream_start_ms {
             if self
                 .last_stream_start_ms
@@ -1007,6 +1140,8 @@ impl AcpUpdateTracker {
                 self.handle_thought_chunk(thought, meta, scrollback)
             }
             acp::SessionUpdate::ToolCall(tc) => {
+                // mlx-node fork: the request that ticked is done sampling.
+                self.stream_progress = None;
                 self.handle_tool_call(tc, scrollback, meta.is_replay)
             }
             acp::SessionUpdate::ToolCallUpdate(tcu) => {
@@ -1056,6 +1191,7 @@ impl AcpUpdateTracker {
         self.last_stream_start_ms = None;
         self.compaction_activity = None;
         self.retry_activity = None;
+        self.stream_progress = None;
         self.hooks_running = None;
         self.writing_tool_call = None;
         self.writing_tool_names.clear();

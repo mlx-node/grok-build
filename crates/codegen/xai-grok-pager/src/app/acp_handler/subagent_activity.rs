@@ -43,7 +43,22 @@ pub(super) fn sync_subagent_activity(
 /// Resolve a subagent child view's live activity into the display label [`sync_subagent_activity`] stamps.
 /// A child that is busy between activities shows "Waiting".
 pub(super) fn subagent_activity_label(child_view: &AgentView) -> Option<String> {
+    use crate::acp::tracker::{StreamProgressLabel, TurnActivity, WaitingReason};
     match child_view.resolve_turn_activity() {
+        // mlx-node fork: the child's own prefill/decode progress while it waits on or streams from the model.
+        Some(
+            a @ (TurnActivity::Thinking
+            | TurnActivity::Responding
+            | TurnActivity::Waiting(WaitingReason::Model)),
+        ) => Some(
+            match child_view.session.tracker.stream_progress_short_label() {
+                Some(StreamProgressLabel::Replace(label)) => label,
+                Some(StreamProgressLabel::Suffix(suffix)) => {
+                    crate::app::subagent::format_activity_label(&a) + suffix.as_str()
+                }
+                None => crate::app::subagent::format_activity_label(&a),
+            },
+        ),
         Some(a) => Some(crate::app::subagent::format_activity_label(&a)),
         None if child_view.session.state.is_busy() => Some("Waiting".to_string()),
         None => None,
