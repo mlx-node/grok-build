@@ -838,6 +838,47 @@ pub struct TurnPerf {
     pub cached_prefix_tokens: Option<u32>,
 }
 
+// mlx-node fork: live progress the local MLX server attaches to the SSE
+// keepalive `ping` (`mlx_progress`) while a streaming response runs. Every
+// field is optional and omitted by the server when unknown.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct StreamProgress {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<StreamProgressPhase>,
+    /// Milliseconds since the request's stream started (server clock).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
+    /// Tokens this turn must prefill, excluding the cached prefix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefill_total: Option<u32>,
+    /// Tokens of `prefill_total` done so far.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefill_done: Option<u32>,
+    /// Prefix tokens reused from the server's cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_tokens: Option<u32>,
+    /// Prefill rate over the window since the previous tick.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefill_tokens_per_second: Option<f64>,
+    /// Tokens generated so far.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated_tokens: Option<u32>,
+    /// Decode rate over the window since the previous tick.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decode_tokens_per_second: Option<f64>,
+}
+
+// mlx-node fork: `queued` = accepted but this request's prefill has not started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamProgressPhase {
+    Queued,
+    Prefill,
+    Decode,
+    #[serde(other)]
+    Unknown,
+}
+
 /// Response from a conversation turn.
 /// Helpers (`assistant()`, `empty_reason()`, etc.) treat the trailing Assistant as "the response message" for backwards-compatible call sites.
 #[derive(Debug, Clone)]

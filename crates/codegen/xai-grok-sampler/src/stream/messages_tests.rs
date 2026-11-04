@@ -825,11 +825,125 @@ async fn model_metadata_yielded_after_stream_started() {
 #[test]
 fn meaningful_content_classifier_treats_ping_as_keepalive() {
     assert!(!messages_event_has_meaningful_content(
-        &MessageStreamEvent::Ping
+        &MessageStreamEvent::Ping { mlx_progress: None }
     ));
     assert!(messages_event_has_meaningful_content(
         &MessageStreamEvent::MessageStop
     ));
+    // mlx-node fork: a progress-carrying ping is real model progress
+    assert!(messages_event_has_meaningful_content(&progress_ping(1)));
+}
+
+// mlx-node fork: live progress on the MLX server's keepalive ping
+fn progress_ping(prefill_done: u32) -> MessageStreamEvent {
+    MessageStreamEvent::Ping {
+        mlx_progress: Some(xai_grok_sampling_types::StreamProgress {
+            phase: Some(xai_grok_sampling_types::StreamProgressPhase::Prefill),
+            prefill_total: Some(20_700),
+            prefill_done: Some(prefill_done),
+            ..Default::default()
+        }),
+    }
+}
+
+// mlx-node fork
+fn spaced_pings(
+    pings: Vec<MessageStreamEvent>,
+    gap: Duration,
+) -> BoxStream<'static, Result<MessageStreamEvent, SamplingError>> {
+    stream::iter(vec![Ok(message_start())])
+        .chain(stream::iter(pings).then(move |ping| async move {
+            tokio::time::sleep(gap).await;
+            Ok(ping)
+        }))
+        .chain(stream::iter(vec![Ok(MessageStreamEvent::MessageStop)]))
+        .boxed()
+}
+
+// mlx-node fork
+#[tokio::test]
+async fn progress_ping_yields_stream_progress_before_completed() {
+    let raw = stream::iter(vec![
+        Ok(message_start()),
+        Ok(MessageStreamEvent::Ping { mlx_progress: None }),
+        Ok(progress_ping(12_300)),
+        Ok(text_block_start(0)),
+        Ok(text_delta(0, "hi")),
+        Ok(block_stop(0)),
+        Ok(MessageStreamEvent::MessageStop),
+    ])
+    .boxed();
+    let evs = collect(stream_messages(raw, None, rid(), Duration::from_secs(60))).await;
+
+    let progress: Vec<usize> = evs
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| matches!(e, SamplingEvent::StreamProgress { .. }))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(progress.len(), 1, "only the progress ping yields: {evs:?}");
+    match nth(&evs, progress[0]) {
+        SamplingEvent::StreamProgress {
+            request_id,
+            progress,
+        } => {
+            assert_eq!(request_id, &rid());
+            assert_eq!(progress.prefill_done, Some(12_300));
+            assert_eq!(progress.prefill_total, Some(20_700));
+        }
+        other => panic!("expected StreamProgress, got {other:?}"),
+    }
+    let first_token = evs
+        .iter()
+        .position(|e| matches!(e, SamplingEvent::FirstToken { .. }))
+        .expect("FirstToken");
+    assert!(progress[0] < first_token);
+    assert!(matches!(
+        evs.last().unwrap(),
+        SamplingEvent::Completed { .. }
+    ));
+}
+
+// mlx-node fork: progress pings keep a stream with no content alive past the idle timeout
+#[tokio::test]
+async fn progress_pings_reset_idle_check() {
+    let pings = (1..=10).map(|i| progress_ping(i * 1000)).collect();
+    let raw = spaced_pings(pings, Duration::from_millis(40));
+    let evs = collect(stream_messages(
+        raw,
+        None,
+        rid(),
+        Duration::from_millis(200),
+    ))
+    .await;
+
+    assert!(
+        matches!(evs.last().unwrap(), SamplingEvent::Completed { .. }),
+        "expected Completed, got {evs:?}"
+    );
+}
+
+// mlx-node fork: plain pings stay keepalive-only and do not reset the idle check
+#[tokio::test]
+async fn plain_pings_do_not_reset_idle_check() {
+    let pings = (0..10)
+        .map(|_| MessageStreamEvent::Ping { mlx_progress: None })
+        .collect();
+    let raw = spaced_pings(pings, Duration::from_millis(40));
+    let evs = collect(stream_messages(
+        raw,
+        None,
+        rid(),
+        Duration::from_millis(200),
+    ))
+    .await;
+
+    match evs.last().unwrap() {
+        SamplingEvent::Failed { error, .. } => {
+            assert_eq!(error.kind, crate::events::SamplingErrorKind::IdleTimeout);
+        }
+        other => panic!("expected Failed(IdleTimeout), got {other:?}"),
+    }
 }
 
 // ── Token usage: Anthropic Messages API cache-bucket accounting ────────────

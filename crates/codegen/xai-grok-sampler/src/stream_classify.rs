@@ -133,7 +133,7 @@ fn message_event_has_content(event: &messages::MessageStreamEvent) -> bool {
         | MessageStreamEvent::MessageDelta { .. }
         | MessageStreamEvent::MessageStop
         | MessageStreamEvent::ContentBlockStop { .. }
-        | MessageStreamEvent::Ping
+        | MessageStreamEvent::Ping { .. }
         | MessageStreamEvent::Error { .. } => false,
     }
 }
