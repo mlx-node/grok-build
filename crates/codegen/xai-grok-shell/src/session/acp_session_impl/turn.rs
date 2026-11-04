@@ -242,8 +242,8 @@ struct TurnSpanTotals {
     output_tokens: i64,
     cache_read_tokens: i64,
     has_tool_call: bool,
-    /// mlx-node fork: this round's response perf counters (last-wins per round like `stop_reason`).
-    last_response_perf: Option<xai_grok_sampling_types::TurnPerf>,
+    /// mlx-node fork: this round's server perf counters, summed over its calls.
+    perf: xai_grok_sampling_types::TurnPerfTotals,
 }
 /// Sums of every completed round's [`TurnSpanTotals`], stamped on the turn's one turn-end
 /// snapshot (`take_completed_turn_snapshot`).
@@ -252,8 +252,8 @@ pub(super) struct TurnSampling {
     pub(super) input_tokens: u64,
     pub(super) output_tokens: u64,
     pub(super) cache_read_tokens: u64,
-    /// mlx-node fork: the last response's perf counters, for the terminal `TurnCompleted` update.
-    pub(super) last_response_perf: Option<xai_grok_sampling_types::TurnPerf>,
+    /// mlx-node fork: perf counters summed over every call of the turn, for `TurnCompleted`.
+    pub(super) perf: xai_grok_sampling_types::TurnPerfTotals,
 }
 impl TurnSampling {
     /// Takes the round by value: a late interjection continues the loop after bookkeeping, and
@@ -262,7 +262,8 @@ impl TurnSampling {
         self.input_tokens += round.input_tokens.max(0) as u64;
         self.output_tokens += round.output_tokens.max(0) as u64;
         self.cache_read_tokens += round.cache_read_tokens.max(0) as u64;
-        self.last_response_perf = round.last_response_perf;
+        // mlx-node fork: per-turn perf totals.
+        self.perf.merge(&round.perf);
     }
 }
 impl TurnSpanTotals {
@@ -283,8 +284,11 @@ impl TurnSpanTotals {
         }
         self.has_tool_call |= !response.tool_calls().is_empty();
         span.record("response.has_tool_call", self.has_tool_call);
-        // mlx-node fork: keep the response's server-reported perf for the turn terminal.
-        self.last_response_perf = response.perf;
+        // mlx-node fork: sum the call's server perf into the turn totals.
+        self.perf.add_call(
+            response.perf.as_ref(),
+            response.usage.as_ref().map_or(0, |u| u.completion_tokens),
+        );
         record_last_sample(
             span,
             response
@@ -2509,7 +2513,8 @@ impl SessionActor {
         snapshot.turn_input_tokens = sampling.input_tokens;
         snapshot.turn_output_tokens = sampling.output_tokens;
         snapshot.turn_cached_input_tokens = sampling.cache_read_tokens;
-        snapshot.last_response_perf = sampling.last_response_perf;
+        // mlx-node fork: per-turn perf totals.
+        snapshot.turn_perf = sampling.perf.finish();
         self.apply_prompt_modes_to_snapshot(&mut snapshot);
         Some(snapshot)
     }
@@ -4482,5 +4487,38 @@ mod last_sample_span_tests {
         );
         assert_eq!(f.bools.get("last_sample.has_tool_call"), Some(&true));
         assert_eq!(f.i64s.get("last_sample.output_tokens"), Some(&3));
+    }
+    // mlx-node fork: the turn's perf totals every call across rounds, not the last call.
+    #[test]
+    fn turn_perf_totals_every_call_across_rounds() {
+        use xai_grok_sampling_types::TurnPerf;
+        let span = tracing::Span::none();
+        let with_perf = |out: u32, ttft: f64, prefill_tps: f64, decode_tps: f64| {
+            let mut r = sample(Some(StopReason::ToolCalls), true, out);
+            r.perf = Some(TurnPerf {
+                ttft_ms: Some(ttft),
+                prefill_tokens_per_second: Some(prefill_tps),
+                decode_tokens_per_second: Some(decode_tps),
+                prefill_input_tokens: Some(1000),
+                cached_prefix_tokens: Some(500),
+                prefill_ms: None,
+            });
+            r
+        };
+        let mut turn = super::TurnSampling::default();
+        let mut round = TurnSpanTotals::default();
+        round.record(&span, &with_perf(100, 2000.0, 1000.0, 50.0));
+        round.record(&span, &sample(Some(StopReason::ToolCalls), true, 9));
+        turn.fold(round);
+        let mut round = TurnSpanTotals::default();
+        round.record(&span, &with_perf(300, 500.0, 200.0, 100.0));
+        turn.fold(round);
+        let perf = turn.perf.finish().expect("perf");
+        assert_eq!(perf.ttft_ms, Some(2000.0));
+        assert_eq!(perf.prefill_ms, Some(2500.0));
+        assert_eq!(perf.prefill_tokens_per_second, Some(840.0));
+        assert_eq!(perf.decode_tokens_per_second, Some(80.0));
+        assert_eq!(perf.prefill_input_tokens, Some(2000));
+        assert_eq!(perf.cached_prefix_tokens, Some(1000));
     }
 }

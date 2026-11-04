@@ -1179,6 +1179,7 @@ async fn message_delta_perf_fields_land_on_response() {
         decode_tokens_per_second: Some(38.1),
         prefill_input_tokens: Some(200),
         cached_prefix_tokens: Some(2100),
+        prefill_ms: None,
     };
     let events = vec![
         Ok(message_start()),
