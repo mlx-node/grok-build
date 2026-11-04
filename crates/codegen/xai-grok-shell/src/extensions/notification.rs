@@ -1152,7 +1152,7 @@ pub enum SessionUpdate {
         /// Wall-clock turn duration in milliseconds. `None` on old files.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         elapsed_ms: Option<u64>,
-        /// mlx-node fork: the turn's last response perf counters (prefill/decode tok/s, cache share). `None` on old files and other backends.
+        /// mlx-node fork: perf counters totalled over every model call of the turn (prefill/decode tok/s, cache share). Files written before the totals carry the last call's values; `None` on older files and other backends.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         perf: Option<xai_grok_sampling_types::TurnPerf>,
     },

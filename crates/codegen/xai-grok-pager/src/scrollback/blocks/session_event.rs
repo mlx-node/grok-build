@@ -384,7 +384,14 @@ impl SessionEvent {
                 // prefix-cache hit share when the server reported them.
                 let mut msg = format!("Worked for {}", format_duration(*elapsed));
                 if let Some(perf) = perf {
-                    if let Some(tps) = perf.prefill_tokens_per_second {
+                    // Below the small-prefill floor the rate is per-call cost, so show work and time.
+                    if let Some((work, ms)) = perf.small_prefill() {
+                        msg.push_str(&format!(
+                            " · ↑{} tok in {:.1} s",
+                            work.round() as u64,
+                            ms / 1000.0
+                        ));
+                    } else if let Some(tps) = perf.prefill_tokens_per_second {
                         msg.push_str(&format!(" · ↑{} tok/s prefill", tps.round() as u64));
                     }
                     if let Some(tps) = perf.decode_tokens_per_second {
@@ -860,17 +867,77 @@ mod tests {
         let event = SessionEvent::TurnCompleted {
             elapsed: Some(Duration::from_secs(45) + Duration::from_millis(200)),
             perf: Some(xai_grok_shell::extensions::notification::TurnPerf {
-                ttft_ms: Some(450.2),
-                prefill_tokens_per_second: Some(412.5),
+                ttft_ms: Some(1200.0),
+                prefill_tokens_per_second: Some(912.5),
                 decode_tokens_per_second: Some(38.1),
-                prefill_input_tokens: Some(200),
+                prefill_input_tokens: Some(1095),
                 cached_prefix_tokens: Some(2100),
+                prefill_ms: Some(2400.0),
+            }),
+        };
+        // 912.5 tok/s × 2.4 s = 2190 work tokens: a throughput, not a per-call cost.
+        assert_eq!(
+            event.message(),
+            "Worked for 45s · ↑913 tok/s prefill · ↓38 tok/s decode · 65% cached"
+        );
+    }
+
+    #[test]
+    fn turn_completed_message_shows_small_prefill_as_work_and_time() {
+        // mlx-node fork: 400 tok/s × 0.9 s = 360 work tokens, below the 512 floor.
+        let event = SessionEvent::TurnCompleted {
+            elapsed: Some(Duration::from_secs(12)),
+            perf: Some(xai_grok_shell::extensions::notification::TurnPerf {
+                ttft_ms: Some(300.0),
+                prefill_tokens_per_second: Some(400.0),
+                decode_tokens_per_second: Some(50.0),
+                prefill_input_tokens: Some(360),
+                cached_prefix_tokens: Some(3240),
+                prefill_ms: Some(900.0),
             }),
         };
         assert_eq!(
             event.message(),
-            "Worked for 45s · ↑413 tok/s prefill · ↓38 tok/s decode · 91% cached"
+            "Worked for 12s · ↑360 tok in 0.9 s · ↓50 tok/s decode · 90% cached"
         );
+    }
+
+    #[test]
+    fn turn_completed_message_old_file_perf_uses_ttft_as_prefill_time() {
+        // mlx-node fork: an old session file's last-call perf has no `prefill_ms`.
+        let perf: xai_grok_shell::extensions::notification::TurnPerf = serde_json::from_str(
+            r#"{"ttft_ms":450.2,"prefill_tokens_per_second":412.5,"decode_tokens_per_second":38.1,"prefill_input_tokens":200,"cached_prefix_tokens":2100}"#,
+        )
+        .expect("old perf parses");
+        let event = SessionEvent::TurnCompleted {
+            elapsed: Some(Duration::from_secs(45) + Duration::from_millis(200)),
+            perf: Some(perf),
+        };
+        // 412.5 tok/s × 0.4502 s = 186 work tokens.
+        assert_eq!(
+            event.message(),
+            "Worked for 45s · ↑186 tok in 0.5 s · ↓38 tok/s decode · 91% cached"
+        );
+        let large: xai_grok_shell::extensions::notification::TurnPerf =
+            serde_json::from_str(r#"{"ttft_ms":2000.0,"prefill_tokens_per_second":1500.0}"#)
+                .expect("old perf parses");
+        let event = SessionEvent::TurnCompleted {
+            elapsed: Some(Duration::from_secs(3)),
+            perf: Some(large),
+        };
+        assert_eq!(event.message(), "Worked for 3.0s · ↑1500 tok/s prefill");
+    }
+
+    #[test]
+    fn turn_completed_message_prefill_rate_without_time_keeps_rate() {
+        let event = SessionEvent::TurnCompleted {
+            elapsed: Some(Duration::from_secs(1)),
+            perf: Some(xai_grok_shell::extensions::notification::TurnPerf {
+                prefill_tokens_per_second: Some(40.0),
+                ..Default::default()
+            }),
+        };
+        assert_eq!(event.message(), "Worked for 1.0s · ↑40 tok/s prefill");
     }
 
     #[test]

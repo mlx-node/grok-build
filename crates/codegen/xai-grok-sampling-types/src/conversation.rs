@@ -816,15 +816,19 @@ impl From<Usage> for TokenUsage {
     }
 }
 
-// mlx-node fork: per-response perf counters the local MLX server stamps on
-// the terminal `message_delta.usage` (kept off `TokenUsage`, which is `Eq`
-// and these counters are `f64`). All optional; `None` on other backends.
+// mlx-node fork: perf counters the local MLX server stamps on the terminal
+// `message_delta.usage` (kept off `TokenUsage`, which is `Eq` and these
+// counters are `f64`). One response's values on `ConversationResponse`; the
+// turn's totals over every call (`TurnPerfTotals`) on `TurnCompleted`. All
+// optional; `None` on other backends. Old session files carry last-call
+// values and no `prefill_ms`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct TurnPerf {
-    /// Server-measured time to first token for this response.
+    /// Server-measured time to first token (turn: the first call's).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ttft_ms: Option<f64>,
-    /// Server-measured prefill throughput (tokens/second).
+    /// Server-measured prefill throughput (tokens/second); prefill work tokens
+    /// over the prefill time (`prefill_ms`, else `ttft_ms`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefill_tokens_per_second: Option<f64>,
     /// Server-measured decode throughput (tokens/second).
@@ -836,6 +840,122 @@ pub struct TurnPerf {
     /// Prompt tokens served from the server's prefix cache.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cached_prefix_tokens: Option<u32>,
+    /// Turn total prefill time: summed `ttft_ms` of the calls that reported
+    /// both `ttft_ms` and a prefill rate. Unset on a single response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefill_ms: Option<f64>,
+}
+
+// mlx-node fork: below this many prefill work tokens a prefill rate is the
+// fixed per-call cost, not throughput.
+pub const TURN_PERF_MIN_PREFILL_RATE_TOKENS: f64 = 512.0;
+
+impl TurnPerf {
+    /// Prefill time in ms: `prefill_ms`, else `ttft_ms` (single response, old files).
+    pub fn prefill_time_ms(&self) -> Option<f64> {
+        self.prefill_ms.or(self.ttft_ms)
+    }
+
+    /// Prefill work tokens: rate × prefill time. Can exceed
+    /// `prefill_input_tokens` when the engine re-prefills the full prompt.
+    pub fn prefill_work_tokens(&self) -> Option<f64> {
+        Some(self.prefill_tokens_per_second? * self.prefill_time_ms()? / 1000.0)
+    }
+
+    /// `(work tokens, prefill ms)` when the prefill is below
+    /// [`TURN_PERF_MIN_PREFILL_RATE_TOKENS`] and its rate is not throughput.
+    pub fn small_prefill(&self) -> Option<(f64, f64)> {
+        let work = self.prefill_work_tokens()?;
+        (work < TURN_PERF_MIN_PREFILL_RATE_TOKENS)
+            .then(|| (work, self.prefill_time_ms().unwrap_or(0.0)))
+    }
+}
+
+// mlx-node fork: sums one turn's per-call `TurnPerf`s (across agentic-loop
+// rounds) into the turn's totals; `finish` builds the `TurnCompleted` perf.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TurnPerfTotals {
+    calls: u32,
+    first_ttft_ms: Option<f64>,
+    prefill_ms: f64,
+    prefill_work_tokens: f64,
+    prefill_calls: u32,
+    prefill_input_tokens: Option<u32>,
+    cached_prefix_tokens: Option<u32>,
+    decode_tokens: f64,
+    decode_secs: f64,
+}
+
+fn finite_non_negative(v: Option<f64>) -> Option<f64> {
+    v.filter(|v| v.is_finite() && *v >= 0.0)
+}
+
+fn add_count(total: Option<u32>, n: Option<u32>) -> Option<u32> {
+    match (total, n) {
+        (Some(t), Some(n)) => Some(t.saturating_add(n)),
+        (t, n) => t.or(n),
+    }
+}
+
+impl TurnPerfTotals {
+    /// Add one model call: its perf (`None` when unreported) and its output token count.
+    pub fn add_call(&mut self, perf: Option<&TurnPerf>, output_tokens: u32) {
+        let perf = perf.copied().unwrap_or_default();
+        let ttft = finite_non_negative(perf.ttft_ms);
+        if self.calls == 0 {
+            self.first_ttft_ms = ttft;
+        }
+        self.calls += 1;
+        if let (Some(ttft), Some(rate)) =
+            (ttft, finite_non_negative(perf.prefill_tokens_per_second))
+        {
+            self.prefill_ms += ttft;
+            self.prefill_work_tokens += rate * ttft / 1000.0;
+            self.prefill_calls += 1;
+        }
+        self.prefill_input_tokens = add_count(self.prefill_input_tokens, perf.prefill_input_tokens);
+        self.cached_prefix_tokens = add_count(self.cached_prefix_tokens, perf.cached_prefix_tokens);
+        if let Some(rate) = finite_non_negative(perf.decode_tokens_per_second).filter(|r| *r > 0.0)
+            && output_tokens > 0
+        {
+            let out = f64::from(output_tokens);
+            self.decode_tokens += out;
+            self.decode_secs += out / rate;
+        }
+    }
+
+    /// Fold a later span of calls (a later round) into these totals.
+    pub fn merge(&mut self, later: &TurnPerfTotals) {
+        if self.calls == 0 {
+            self.first_ttft_ms = later.first_ttft_ms;
+        }
+        self.calls += later.calls;
+        self.prefill_ms += later.prefill_ms;
+        self.prefill_work_tokens += later.prefill_work_tokens;
+        self.prefill_calls += later.prefill_calls;
+        self.prefill_input_tokens =
+            add_count(self.prefill_input_tokens, later.prefill_input_tokens);
+        self.cached_prefix_tokens =
+            add_count(self.cached_prefix_tokens, later.cached_prefix_tokens);
+        self.decode_tokens += later.decode_tokens;
+        self.decode_secs += later.decode_secs;
+    }
+
+    /// The turn's totals; `None` when no call reported any counter.
+    pub fn finish(&self) -> Option<TurnPerf> {
+        let has_prefill = self.prefill_calls > 0;
+        let perf = TurnPerf {
+            ttft_ms: self.first_ttft_ms,
+            prefill_ms: has_prefill.then_some(self.prefill_ms),
+            prefill_tokens_per_second: (has_prefill && self.prefill_ms > 0.0)
+                .then(|| self.prefill_work_tokens / (self.prefill_ms / 1000.0)),
+            decode_tokens_per_second: (self.decode_secs > 0.0)
+                .then(|| self.decode_tokens / self.decode_secs),
+            prefill_input_tokens: self.prefill_input_tokens,
+            cached_prefix_tokens: self.cached_prefix_tokens,
+        };
+        (perf != TurnPerf::default()).then_some(perf)
+    }
 }
 
 // mlx-node fork: live progress the local MLX server attaches to the SSE
@@ -2320,6 +2440,10 @@ mod responses_tests;
 #[cfg(test)]
 #[path = "conversation/messages_tests.rs"]
 mod messages_tests;
+
+#[cfg(test)]
+#[path = "conversation/turn_perf_tests.rs"]
+mod turn_perf_tests;
 
 #[cfg(test)]
 mod tests {
