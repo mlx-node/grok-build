@@ -307,6 +307,24 @@ pub(super) struct BridgeToolSuccess<'a> {
     pub model_output_override: Option<String>,
 }
 impl SessionActor {
+    /// Every ask a child session sends on the shared manager must carry this, or the client cannot route it to the child.
+    pub(super) fn permission_requester(
+        &self,
+    ) -> Option<xai_grok_workspace::permission::PermissionRequester> {
+        self.startup_hints.is_subagent.then(|| {
+            xai_grok_workspace::permission::PermissionRequester {
+                session_id: self.session_info.id.0.to_string(),
+                label: self
+                    .startup_hints
+                    .subagent_label
+                    .clone()
+                    .unwrap_or_default(),
+                run_id: self.startup_hints.workflow_run_id.clone(),
+                cwd: std::path::PathBuf::from(self.session_info.cwd.as_str()),
+            }
+        })
+    }
+
     /// Merge the canonical `x.ai/tool` identity envelope into a tool-call event's `_meta`, resolving the tool from the live toolset by wire name.
     pub(super) fn stamp_tool_meta(
         &self,
@@ -1837,6 +1855,7 @@ impl SessionActor {
             let perm_wait_span = xai_grok_telemetry::region::Region::from_span(
                 tracing::info_span!("permission.wait", wait_ms = tracing::field::Empty),
             );
+            let requester = self.permission_requester();
             let resolution = {
                 let _pending_guard =
                     crate::session::pending_interaction::PendingInteractionGuard::new(
@@ -1851,6 +1870,7 @@ impl SessionActor {
                         path_context,
                         session_id: Some(self.session_info.id.0.to_string()),
                         hook_ask,
+                        requester,
                         ..PermissionRequest::new(access_kind.clone(), tool_call_update)
                     })
                     .await

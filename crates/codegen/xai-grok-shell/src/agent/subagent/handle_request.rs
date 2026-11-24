@@ -1506,6 +1506,8 @@ pub(crate) async fn run_shell_child(
             non_interactive: ctx.parent_non_interactive,
             parent_session_id: Some(ctx.parent_session_id.clone()),
             subagent_type: Some(request.subagent_type.clone()),
+            subagent_label: Some(request.description.clone()),
+            workflow_run_id: request.owner.workflow_run_id().map(str::to_owned),
             preserve_inherited_system: verbatim_mirror_fork,
             parent_cwd: Some(ctx.parent_cwd.clone()),
             ..Default::default()

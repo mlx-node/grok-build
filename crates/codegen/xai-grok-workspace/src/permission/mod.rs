@@ -115,5 +115,6 @@ pub use state::cleanup_stale_permission_state;
 pub(crate) use state::{StateFileAccess, load_state_from_disk, persist_state};
 pub use types::{
     AccessKind, ClientType, Decision, HOOK_ASK_META_KEY, HookAsk, PermissionCommand,
-    PermissionEvent, PermissionRequest, PermissionResolution,
+    PermissionEvent, PermissionRequest, PermissionRequester, PermissionResolution,
+    REQUESTER_META_KEY,
 };

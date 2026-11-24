@@ -5,7 +5,9 @@ use std::time::Instant;
 use crate::permission::{
     bash_command_splitting::{BashCommandHighlights, primary_command_from_script},
     grants::web_fetch_deny_key_from_url,
-    types::{AccessKind, ClientType, HOOK_ASK_META_KEY, HookAsk},
+    types::{
+        AccessKind, ClientType, HOOK_ASK_META_KEY, HookAsk, PermissionRequester, REQUESTER_META_KEY,
+    },
 };
 use agent_client_protocol::{self as acp, Client as _};
 use xai_acp_lib::AcpAgentGatewaySender as GatewaySender;
@@ -540,11 +542,13 @@ impl AcpPrompter {
 
     /// Request `_meta`: the bash selection scope or the protected-edit description (never both).
     /// The hook ask is merged in when one forced this prompt, so a client that writes its own title still sees it.
+    /// A child session's ask also names that child, since the request itself carries the parent's sessionId.
     fn permission_request_meta(
         &self,
         access: &AccessKind,
         protected_edit: Option<crate::permission::ProtectedEditReason>,
         hook_ask: Option<&HookAsk>,
+        requester: Option<&PermissionRequester>,
     ) -> Option<acp::Meta> {
         let mut meta = self
             .bash_selection_meta(access)
@@ -552,6 +556,9 @@ impl AcpPrompter {
             .unwrap_or_default();
         if let Some(value) = hook_ask.and_then(|ask| serde_json::to_value(ask).ok()) {
             meta.insert(HOOK_ASK_META_KEY.to_owned(), value);
+        }
+        if let Some(value) = requester.and_then(|who| serde_json::to_value(who).ok()) {
+            meta.insert(REQUESTER_META_KEY.to_owned(), value);
         }
         (!meta.is_empty()).then_some(meta)
     }
@@ -739,6 +746,7 @@ impl AcpPrompter {
         tool_call_update: &acp::ToolCallUpdate,
         protected_edit: Option<crate::permission::ProtectedEditReason>,
         hook_ask: Option<&HookAsk>,
+        requester: Option<&PermissionRequester>,
     ) -> PromptOutcome {
         let tool_name = tool_name_for_access(access);
         // events.jsonl: `PermissionRequested` at prompt-start
@@ -777,6 +785,7 @@ impl AcpPrompter {
                     access,
                     protected_edit,
                     hook_ask,
+                    requester,
                 ));
                 match self.gateway.request_permission(req).await {
                     Ok(resp) => match resp.outcome {
@@ -1076,7 +1085,12 @@ mod tests {
         let access = AccessKind::Edit("a.rs".to_owned());
 
         let meta = prompter
-            .permission_request_meta(&access, /*protected_edit=*/ None, Some(&ask))
+            .permission_request_meta(
+                &access,
+                /*protected_edit=*/ None,
+                Some(&ask),
+                /*requester=*/ None,
+            )
             .expect("a hook ask always produces meta");
         assert_eq!(
             serde_json::Value::Object(meta),
@@ -1089,6 +1103,7 @@ mod tests {
                 &access,
                 Some(crate::permission::ProtectedEditReason::Sensitive),
                 Some(&ask),
+                /*requester=*/ None,
             )
             .expect("an ask plus a protected edit always produces meta");
         assert_eq!(
@@ -1102,7 +1117,8 @@ mod tests {
         assert!(
             prompter
                 .permission_request_meta(
-                    &access, /*protected_edit=*/ None, /*hook_ask=*/ None
+                    &access, /*protected_edit=*/ None, /*hook_ask=*/ None,
+                    /*requester=*/ None,
                 )
                 .is_none(),
             "no ask and no protected edit leaves the meta absent"
@@ -1134,6 +1150,84 @@ mod tests {
                 .title,
             titled.fields.title,
             "no ask leaves the title untouched"
+        );
+    }
+
+    #[test]
+    fn requester_reaches_the_request_meta_beside_the_hook_ask() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let prompter = AcpPrompter::new(
+            acp::SessionId::new(Arc::from("sess-parent")),
+            GatewaySender::new(tx),
+            ClientType::Generic,
+        );
+        let ask = HookAsk {
+            hook_name: "guard".to_owned(),
+            reason: None,
+        };
+        let access = AccessKind::Bash("ls".to_owned());
+        let child = PermissionRequester {
+            session_id: "sess-child".to_owned(),
+            label: "researcher-0".to_owned(),
+            run_id: Some("wf_1".to_owned()),
+            cwd: std::path::PathBuf::from("/work/repo"),
+        };
+
+        let meta = prompter
+            .permission_request_meta(
+                &access,
+                /*protected_edit=*/ None,
+                Some(&ask),
+                Some(&child),
+            )
+            .expect("a requester always produces meta");
+        assert_eq!(
+            serde_json::Value::Object(meta),
+            serde_json::json!({
+                "hookAsk": { "hookName": "guard" },
+                "x.ai/requester": {
+                    "sessionId": "sess-child",
+                    "label": "researcher-0",
+                    "runId": "wf_1",
+                    "cwd": "/work/repo",
+                },
+            })
+        );
+
+        let plain_child = PermissionRequester {
+            run_id: None,
+            ..child
+        };
+        let meta = prompter
+            .permission_request_meta(
+                &access,
+                /*protected_edit=*/ None,
+                /*hook_ask=*/ None,
+                Some(&plain_child),
+            )
+            .expect("a requester always produces meta");
+        assert_eq!(
+            meta.get(REQUESTER_META_KEY),
+            Some(&serde_json::json!({
+                "sessionId": "sess-child",
+                "label": "researcher-0",
+                "runId": null,
+                "cwd": "/work/repo",
+            })),
+            "a plain subagent child sends runId null, not an absent key"
+        );
+
+        let parent_meta = prompter
+            .permission_request_meta(
+                &access,
+                /*protected_edit=*/ None,
+                Some(&ask),
+                /*requester=*/ None,
+            )
+            .expect("a hook ask always produces meta");
+        assert!(
+            !parent_meta.contains_key(REQUESTER_META_KEY),
+            "the parent's own ask carries no requester"
         );
     }
 
@@ -2105,6 +2199,7 @@ mod tests {
                 &tool_call_update,
                 /*protected_edit=*/ None,
                 /*hook_ask=*/ None,
+                /*requester=*/ None,
             )
             .await;
         assert!(
@@ -2175,6 +2270,7 @@ mod tests {
                 &tool_call_update,
                 /*protected_edit=*/ None,
                 /*hook_ask=*/ None,
+                /*requester=*/ None,
             )
             .await;
         assert!(matches!(outcome, PromptOutcome::Error(_)));

@@ -180,3 +180,208 @@ async fn hook_ask_under_yolo_fires_permission_prompt_notification() {
         })
         .await;
 }
+
+fn run_terminal_command_tool() -> xai_grok_tools::registry::types::ToolConfig {
+    xai_grok_tools::registry::types::ToolConfig {
+        params: Some(
+            serde_json::from_value(serde_json::json!({ "enabled_background": false })).unwrap(),
+        ),
+        ..xai_grok_tools::registry::types::ToolConfig::from(
+            &xai_grok_tools::implementations::grok_build::BashTool,
+        )
+        .with_name("run_terminal_command")
+    }
+}
+
+fn run_terminal_command_call(id: &str, command: &str) -> ToolCallResponse {
+    ToolCallResponse {
+        id: id.to_string(),
+        kind: "function".to_string(),
+        function: crate::sampling::types::ToolCallFunction::new(
+            "run_terminal_command",
+            serde_json::json!({ "command": command, "description": "list files" }).to_string(),
+        ),
+    }
+}
+
+#[derive(Default)]
+struct CapturedAsk {
+    session_id: Option<String>,
+    meta: Option<acp::Meta>,
+}
+
+fn spawn_gateway_capturing_asks(
+    gateway_rx: tokio::sync::mpsc::UnboundedReceiver<xai_acp_lib::AcpClientMessage>,
+) -> Arc<std::sync::Mutex<Vec<CapturedAsk>>> {
+    let asks: Arc<std::sync::Mutex<Vec<CapturedAsk>>> = Arc::default();
+    let captured = asks.clone();
+    let mut gateway_rx = gateway_rx;
+    tokio::task::spawn_local(async move {
+        while let Some(msg) = gateway_rx.recv().await {
+            match msg {
+                xai_acp_lib::AcpClientMessage::RequestPermission(args) => {
+                    captured.lock().unwrap().push(CapturedAsk {
+                        session_id: Some(args.request.session_id.0.to_string()),
+                        meta: args.request.meta.clone(),
+                    });
+                    let _ = args
+                        .response_tx
+                        .send(Ok(acp::RequestPermissionResponse::new(
+                            acp::RequestPermissionOutcome::Selected(
+                                acp::SelectedPermissionOutcome::new(acp::PermissionOptionId::new(
+                                    "allow-once",
+                                )),
+                            ),
+                        )));
+                }
+                xai_acp_lib::AcpClientMessage::SessionNotification(args) => {
+                    let _ = args.response_tx.send(Ok(()));
+                }
+                _ => {}
+            }
+        }
+    });
+    asks
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn child_shell_call_asks_the_parent_through_the_parent_hook_with_its_requester() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, gateway_rx) =
+                tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+            let (persistence_tx, _persistence_rx) =
+                tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+            let mut parent =
+                create_test_actor(0, 256_000, 85, gateway_tx.clone(), persistence_tx).await;
+            parent.session_info.id = acp::SessionId::new("parent-session");
+            install_permission_manager(
+                &mut parent,
+                /*yolo=*/ false,
+                AcpAgentGatewaySender::new(gateway_tx),
+            );
+            install_pre_tool_use_hooks(
+                &mut parent,
+                vec![pre_tool_use_spec(
+                    "test/ask",
+                    Some("Bash"),
+                    r#"echo '{"hookSpecificOutput":{"permissionDecision":"ask"}}'"#,
+                )],
+            );
+            let asks = spawn_gateway_capturing_asks(gateway_rx);
+
+            let (child_gateway_tx, child_gateway_rx) =
+                tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+            let (child_persistence_tx, _child_persistence_rx) =
+                tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+            let mut child =
+                create_test_actor(0, 256_000, 85, child_gateway_tx, child_persistence_tx).await;
+            let child_cwd = tempfile::tempdir().unwrap();
+            child.session_info.id = acp::SessionId::new("child-session");
+            child.session_info.cwd = child_cwd.path().to_string_lossy().into_owned();
+            child.startup_hints.is_subagent = true;
+            child.startup_hints.subagent_label = Some("probe-0".to_owned());
+            child.startup_hints.workflow_run_id = Some("wf_t".to_owned());
+            *child.agent.borrow_mut() =
+                test_agent_with_tools(vec![run_terminal_command_tool()]).await;
+            child.permissions = parent.permissions.clone();
+            *child.hook_registry.borrow_mut() = parent.hook_registry.borrow().clone();
+            child.hook_resolved_workspace_root = parent.hook_resolved_workspace_root.clone();
+            drain_gateway(child_gateway_rx);
+
+            let result =
+                prepare_call(&child, run_terminal_command_call("call_child_ls", "ls")).await;
+            assert!(
+                result.is_ok(),
+                "the hook ask was approved, so the child's call must prepare; got {:?}",
+                result.err()
+            );
+
+            let asks = asks.lock().unwrap();
+            assert_eq!(
+                asks.len(),
+                1,
+                "the parent's ask hook must force one prompt for the child's safe-listed `ls`"
+            );
+            let ask = &asks[0];
+            assert_eq!(
+                ask.session_id.as_deref(),
+                Some("parent-session"),
+                "a child's ask goes out under the parent's sessionId"
+            );
+            let meta = ask.meta.as_ref().expect("a hook ask always carries meta");
+            assert_eq!(
+                meta.get(xai_grok_workspace::permission::HOOK_ASK_META_KEY),
+                Some(&serde_json::json!({ "hookName": "test/ask" })),
+                "the parent's guard hook must be the one that asked"
+            );
+            assert_eq!(
+                meta.get(xai_grok_workspace::permission::REQUESTER_META_KEY),
+                Some(&serde_json::json!({
+                    "sessionId": "child-session",
+                    "label": "probe-0",
+                    "runId": "wf_t",
+                    "cwd": child_cwd.path().to_string_lossy(),
+                })),
+                "the ask must name the child that made it"
+            );
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn parent_own_ask_carries_no_requester() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, gateway_rx) =
+                tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+            let (persistence_tx, _persistence_rx) =
+                tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+            let mut parent =
+                create_test_actor(0, 256_000, 85, gateway_tx.clone(), persistence_tx).await;
+            *parent.agent.borrow_mut() =
+                test_agent_with_tools(vec![run_terminal_command_tool()]).await;
+            install_permission_manager(
+                &mut parent,
+                /*yolo=*/ false,
+                AcpAgentGatewaySender::new(gateway_tx),
+            );
+            install_pre_tool_use_hooks(
+                &mut parent,
+                vec![pre_tool_use_spec(
+                    "test/ask",
+                    Some("Bash"),
+                    r#"echo '{"hookSpecificOutput":{"permissionDecision":"ask"}}'"#,
+                )],
+            );
+            let asks = spawn_gateway_capturing_asks(gateway_rx);
+
+            let result =
+                prepare_call(&parent, run_terminal_command_call("call_parent_ls", "ls")).await;
+            assert!(
+                result.is_ok(),
+                "approved ask must prepare; got {:?}",
+                result.err()
+            );
+
+            let asks = asks.lock().unwrap();
+            assert_eq!(asks.len(), 1, "the ask hook must force one prompt");
+            let meta = asks[0]
+                .meta
+                .as_ref()
+                .expect("a hook ask always carries meta");
+            assert!(
+                meta.get(xai_grok_workspace::permission::HOOK_ASK_META_KEY)
+                    .is_some(),
+                "the parent's own ask keeps hookAsk"
+            );
+            assert!(
+                meta.get(xai_grok_workspace::permission::REQUESTER_META_KEY)
+                    .is_none(),
+                "the parent's own ask carries no requester"
+            );
+        })
+        .await;
+}

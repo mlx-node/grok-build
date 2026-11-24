@@ -131,6 +131,18 @@ pub struct HookAsk {
 
 pub const HOOK_ASK_META_KEY: &str = "hookAsk";
 
+/// The child session that made an ask on the shared session-tree manager; the prompt still carries the parent's sessionId.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRequester {
+    pub session_id: String,
+    pub label: String,
+    pub run_id: Option<String>,
+    pub cwd: std::path::PathBuf,
+}
+
+pub const REQUESTER_META_KEY: &str = "x.ai/requester";
+
 const HOOK_ASK_SEPARATOR: &str = " — ";
 
 impl HookAsk {
@@ -166,6 +178,7 @@ pub struct PermissionRequest {
     pub subagent_type: Option<String>,
     pub subagent_description: Option<String>,
     pub hook_ask: Option<HookAsk>,
+    pub requester: Option<PermissionRequester>,
 }
 
 impl PermissionRequest {
@@ -178,6 +191,7 @@ impl PermissionRequest {
             subagent_type: None,
             subagent_description: None,
             hook_ask: None,
+            requester: None,
         }
     }
 }

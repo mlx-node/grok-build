@@ -564,6 +564,7 @@ impl SessionActor {
                 .request(PermissionRequest {
                     path_context: Some(context.clone()),
                     session_id: Some(self.session_info.id.0.to_string()),
+                    requester: self.permission_requester(),
                     ..PermissionRequest::new(
                         AccessKind::Read(Some(path.to_string_lossy().into_owned())),
                         update,

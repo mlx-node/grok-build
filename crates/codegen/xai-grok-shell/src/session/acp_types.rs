@@ -614,6 +614,12 @@ pub struct StartupHints {
     /// It matches the `SubagentStart`/`SubagentStop` events the parent emits, which also key off the task type, not the resolved agent name.
     #[serde(default)]
     pub subagent_type: Option<String>,
+    /// The child's task description (a workflow agent's label), sent as `x.ai/requester.label` on its permission asks.
+    #[serde(default)]
+    pub subagent_label: Option<String>,
+    /// The workflow run that spawned this child, sent as `x.ai/requester.runId` on its permission asks.
+    #[serde(default)]
+    pub workflow_run_id: Option<String>,
     /// Set on a fork spawn so `install_system_prompt` does NOT overwrite the inherited System at `conversation[0]`.
     /// The verbatim parent copy already holds the parent's System, and overwriting it would bust the cache prefix.
     #[serde(default)]
