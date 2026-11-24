@@ -1030,6 +1030,35 @@ mod tests {
         }
     }
 
+    /// The manager keeps the subagent sender alive, so a run that ends before it spawns would leave a bare `recv()` waiting forever.
+    async fn spawn_before_outcome(
+        rx: &mut SubagentEventRx,
+        outcome: &mut oneshot::Receiver<WorkflowOutcome>,
+    ) -> xai_grok_tools::implementations::grok_build::task::types::SubagentSpawnRequest {
+        use xai_grok_tools::implementations::grok_build::task::types::SubagentEvent;
+        tokio::select! {
+            biased;
+            event = rx.recv() => match event {
+                Some(SubagentEvent::Spawn(req)) => req,
+                Some(_) => panic!("expected spawn, got a non-spawn event"),
+                None => panic!("expected spawn, channel closed"),
+            },
+            ended = outcome => panic!("the run ended before it spawned its agent: {ended:?}"),
+            () = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+                panic!("expected spawn, timed out")
+            }
+        }
+    }
+
+    /// Longer than the watcher's 25 s host-drain bound, so only a stuck run trips it.
+    async fn outcome_within(outcome: oneshot::Receiver<WorkflowOutcome>) -> WorkflowOutcome {
+        match tokio::time::timeout(std::time::Duration::from_secs(60), outcome).await {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(_)) => panic!("the run watcher dropped its outcome"),
+            Err(_) => panic!("the run did not finish within 60 s"),
+        }
+    }
+
     fn complete_spawn(
         req: xai_grok_tools::implementations::grok_build::task::types::SubagentSpawnRequest,
     ) {
@@ -1238,20 +1267,16 @@ mod tests {
 
     #[tokio::test]
     async fn resume_reconciles_agents_used_from_journal_no_double_charge() {
-        use xai_grok_tools::implementations::grok_build::task::types::{
-            SubagentEvent, SubagentResult,
-        };
+        use xai_grok_tools::implementations::grok_build::task::types::SubagentResult;
 
         let dir = tempfile::tempdir().unwrap();
         let (mut manager, mut subagent_rx) = test_manager(Some(dir.path().to_path_buf()));
         let script = "let meta = #{ name: \"t\", description: \"d\" };\nlet r = agent(\"work\");\ncomplete(r.output);";
-        let (run_id, outcome_rx) = manager
+        let (run_id, mut outcome_rx) = manager
             .launch(resolve_inline(script.into()).unwrap(), spec())
             .unwrap();
 
-        let SubagentEvent::Spawn(_first) = subagent_rx.recv().await.expect("first spawn") else {
-            panic!("expected spawn event");
-        };
+        let _first = spawn_before_outcome(&mut subagent_rx, &mut outcome_rx).await;
         assert_eq!(
             manager.tracker.lock().get(&run_id).unwrap().agents_used,
             1,
@@ -1260,7 +1285,7 @@ mod tests {
 
         assert!(manager.pause(&run_id));
         assert!(matches!(
-            outcome_rx.await.unwrap(),
+            outcome_within(outcome_rx).await,
             WorkflowOutcome::Cancelled
         ));
         assert_eq!(
@@ -1269,7 +1294,7 @@ mod tests {
             "cancel tears the host down before the release lands, so the reserved slot leaks in memory"
         );
 
-        let (_resumed_id, outcome_rx) = manager
+        let (_resumed_id, mut outcome_rx) = manager
             .launch(
                 resolve_inline(script.into()).unwrap(),
                 LaunchSpec {
@@ -1278,9 +1303,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let SubagentEvent::Spawn(req) = subagent_rx.recv().await.expect("respawned agent") else {
-            panic!("expected respawn event");
-        };
+        let req = spawn_before_outcome(&mut subagent_rx, &mut outcome_rx).await;
         let id = req.id.clone();
         let _ = req.result_tx.send(SubagentResult {
             success: true,
@@ -1289,7 +1312,7 @@ mod tests {
             ..Default::default()
         });
         assert!(matches!(
-            outcome_rx.await.unwrap(),
+            outcome_within(outcome_rx).await,
             WorkflowOutcome::Completed { .. }
         ));
 
