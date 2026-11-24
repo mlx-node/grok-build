@@ -2488,6 +2488,7 @@ pub(crate) async fn spawn_session_actor(
         hook_registry: hook_registry_for_handle,
         plugin_registry,
         human_rules: None,
+        workflow_launch_tx,
         workspace_ops: workspace_ops_for_handle,
         terminal_backend: Some(terminal_backend.clone()),
         tools_notification_handle: Some(tools_notification_handle.clone()),

@@ -147,6 +147,10 @@ pub struct SessionHandle {
     pub plugin_registry: Option<std::sync::Arc<xai_grok_agent::plugins::PluginRegistry>>,
     /// The client's `_meta.rules` text.
     pub human_rules: Option<std::sync::Arc<str>>,
+    /// The workflow tool's own request-service sender: client control must share its gates and Stop's no-wake rule.
+    pub workflow_launch_tx: tokio::sync::mpsc::UnboundedSender<
+        xai_grok_tools::implementations::grok_build::workflow::WorkflowLaunchEnvelope,
+    >,
     /// Typed workspace operations handle (agent sessions use local ops).
     pub workspace_ops: xai_grok_workspace::WorkspaceOps,
     /// Subagents inherit the parent's backend so background tasks and monitors survive the subagent's exit.

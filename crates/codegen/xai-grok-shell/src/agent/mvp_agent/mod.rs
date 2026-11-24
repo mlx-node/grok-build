@@ -353,6 +353,8 @@ fn chat_new_session_model_state(
 }
 /// `initialize` response `_meta` key advertising `pluginDirs` support.
 pub(crate) const SESSION_PLUGIN_DIRS_CAPABILITY_KEY: &str = "x.ai/pluginDirs";
+/// `initialize` response `_meta` key advertising `x.ai/workflows/stop`.
+pub(crate) const WORKFLOW_CONTROL_CAPABILITY_KEY: &str = "x.ai/workflowControl";
 /// Thin chat-kind profile shared by [`MvpAgent::load_chat_session`] and chat-kind `session/new`.
 /// Noop persistence, no MCP, no client FS / terminal / code-nav.
 /// Keeps spawn options from drifting between new and load.

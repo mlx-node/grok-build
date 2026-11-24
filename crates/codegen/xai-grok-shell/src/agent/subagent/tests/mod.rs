@@ -285,6 +285,7 @@ fn wedged_child_handle() -> (
         hook_registry: None,
         plugin_registry: None,
         human_rules: None,
+        workflow_launch_tx: tokio::sync::mpsc::unbounded_channel().0,
         workspace_ops: xai_grok_workspace::WorkspaceOps::for_test(),
         terminal_backend: None,
         tools_notification_handle: None,

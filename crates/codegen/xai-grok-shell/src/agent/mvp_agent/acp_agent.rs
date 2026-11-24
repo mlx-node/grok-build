@@ -611,6 +611,7 @@ impl acp::Agent for MvpAgent {
                     // `session/new` / `session/load` accept per-session plugin roots in `_meta.pluginDirs`
                     // The SDKs gate `GrokOptions.plugins` on this
                     (SESSION_PLUGIN_DIRS_CAPABILITY_KEY): true,
+                    (WORKFLOW_CONTROL_CAPABILITY_KEY): true,
                     "currentWorkingDirectory": current_working_directory.to_string_lossy().to_string(),
                     "agentVersion": xai_grok_version::VERSION,
                     "agentId": agent_id(),
@@ -2355,6 +2356,9 @@ impl acp::Agent for MvpAgent {
             s if s.starts_with("x.ai/code/") => {
                 let ops = self.resolve_workspace_ops()?;
                 crate::extensions::code_nav::handle(self, &ops, &args).await
+            }
+            crate::extensions::workflows::WORKFLOWS_STOP_METHOD => {
+                crate::extensions::workflows::handle(self, &args).await
             }
             s if s.starts_with("x.ai/skills/") || s == "x.ai/workflows/list" => {
                 let compat = self.cfg.borrow().compat_resolved;
