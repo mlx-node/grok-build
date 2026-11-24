@@ -23,7 +23,7 @@ jobs:
       matrix:
         include:
           # macOS
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             asset_platform: macos
             asset_arch: aarch64
