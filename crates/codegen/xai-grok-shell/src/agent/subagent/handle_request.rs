@@ -1538,6 +1538,7 @@ pub(crate) async fn run_shell_child(
         ctx.resolve_compaction_verbatim_input(),
         ctx.resolve_long_reasoning_reminder(),
         ctx.resolve_compaction_tool_choice(),
+        ctx.resolve_compaction_thinking_budget_tokens(),
         pins.two_pass,
         None,
         None,

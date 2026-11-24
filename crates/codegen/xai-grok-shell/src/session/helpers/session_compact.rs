@@ -426,6 +426,16 @@ where
 #[path = "session_compact_compact_cancel_await_tests.rs"]
 mod compact_cancel_await_tests;
 
+/// The summary call's own thinking budget; none when it is `0` or the session turned thinking off.
+/// Without it the summary takes the server's default budget (12,000 tokens on the local engine).
+fn compaction_thinking_budget(
+    budget_tokens: u32,
+    session_effort: Option<xai_grok_sampling_types::ReasoningEffort>,
+) -> Option<u32> {
+    let thinking_off = session_effort.is_some_and(|effort| effort.to_messages_api().is_none());
+    (budget_tokens > 0 && !thinking_off).then_some(budget_tokens)
+}
+
 /// `chat_history` must already include the summarization prompt as its final user message.
 /// The split lets callers persist the exact request payload before issuing it.
 /// Omitting them would shift the entire prefix and force a full prefill on the summarizer call.
@@ -443,6 +453,7 @@ pub(crate) async fn generate_session_compact(
     idle_timeout: std::time::Duration,
     wall_clock_budget_secs: u64,
     tool_choice: crate::util::config::CompactionToolChoice,
+    thinking_budget_tokens: u32,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<CompactOutput, CompactFailure> {
     if cancel.is_cancelled() {
@@ -716,6 +727,10 @@ pub(crate) async fn generate_session_compact(
                 model: Some(sampling_config.model.to_owned()),
                 temperature: Some(1.0),
                 reasoning_effort: sampling_config.reasoning_effort,
+                thinking_budget_tokens: compaction_thinking_budget(
+                    thinking_budget_tokens,
+                    sampling_config.reasoning_effort,
+                ),
                 x_grok_conv_id: Some(session_id.to_string()),
                 x_grok_req_id: Some(format!("xai-compact-{}", uuid::Uuid::new_v4())),
                 x_grok_session_id: Some(session_id.to_string()),

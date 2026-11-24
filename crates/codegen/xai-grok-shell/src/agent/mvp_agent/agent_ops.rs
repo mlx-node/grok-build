@@ -4423,6 +4423,10 @@ impl MvpAgent {
             .borrow()
             .resolve_long_reasoning_reminder();
         let compaction_tool_choice = self.cfg.borrow().resolve_compaction_tool_choice();
+        let compaction_thinking_budget_tokens = self
+            .cfg
+            .borrow()
+            .resolve_compaction_thinking_budget_tokens();
         let auto_update = self.cfg.borrow().cli.auto_update;
         let client_type = *self.client_type.borrow();
         let buffering_settings = self.buffering_settings.borrow().clone();
@@ -4891,6 +4895,7 @@ impl MvpAgent {
                     compaction_verbatim_input,
                     long_reasoning_reminder,
                     compaction_tool_choice,
+                    compaction_thinking_budget_tokens,
                     two_pass_enabled,
                     buffering_settings,
                     origin_client.clone(),

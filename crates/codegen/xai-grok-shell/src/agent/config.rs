@@ -2403,6 +2403,12 @@ impl Config {
                 .and_then(|r| r.compaction_tool_choice.as_deref()),
         )
     }
+    pub(crate) fn resolve_compaction_thinking_budget_tokens(&self) -> u32 {
+        crate::util::config::resolve_compaction_thinking_budget_tokens_from(
+            env_string(crate::util::config::ENV_COMPACTION_THINKING_BUDGET_TOKENS).as_deref(),
+            self.features.compaction_thinking_budget_tokens,
+        )
+    }
     /// Precedence: env `GROK_COMPACTION_DETAIL` > config `features.compaction_detail` > remote `compaction_detail` > default (`verbose`).
     /// Drives the `segments` verbatim detail level.
     fn resolve_compaction_detail(&self) -> xai_chat_state::CompactionDetail {
@@ -4194,6 +4200,10 @@ pub struct Features {
     pub compaction_detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction_tool_choice: Option<String>,
+    /// Thinking tokens of the compaction summary call on a Messages backend (default 4096, `0` = the session's own setting).
+    /// `None` defers to env (`GROK_COMPACTION_THINKING_BUDGET_TOKENS`) / default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction_thinking_budget_tokens: Option<u32>,
     /// Per-`Ready`-client transport-liveness pollers and the session-actor `StatusDispatcher`. When `true` (default), each successfully-handshaken MCP client gets a poller.
     /// The poller detects rmcp service-loop termination and pushes `x.ai/mcp/server_status` updates to the client.
     /// When `false`, neither watchers nor the dispatcher are spawned, useful as an emergency kill switch for the rollout. `None` defers to env / default (true). Not read through this struct: the live resolver re-reads the `[features]` key out-of-band from raw TOML in `util::config::resolve::mcp`. Declared so `serde_ignored` does not report it as an unrecognized key.

@@ -656,6 +656,8 @@ pub struct ConversationRequest {
     pub traceparent: Option<String>,
     /// Reasoning effort level for reasoning models.
     pub reasoning_effort: Option<crate::ReasoningEffort>,
+    /// Messages only: a fixed thinking budget (`thinking: enabled`) in place of the effort's adaptive thinking.
+    pub thinking_budget_tokens: Option<u32>,
     /// JSON Schema for structured output (strict mode).
     pub json_schema: Option<serde_json::Value>,
     /// Sticky routing key for prompt-cache reuse; overrides `x_grok_conv_id` for routing.

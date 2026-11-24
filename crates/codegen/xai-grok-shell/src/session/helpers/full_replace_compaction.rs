@@ -63,6 +63,7 @@ pub(crate) struct ShellCompactionSampler {
     /// Wall-clock budget (secs) forwarded to `generate_session_compact` as the cap on runaway reasoning; `0` disables it.
     wall_clock_budget_secs: u64,
     tool_choice: crate::util::config::CompactionToolChoice,
+    thinking_budget_tokens: u32,
     cancel: tokio_util::sync::CancellationToken,
     state: Mutex<SamplerState>,
 }
@@ -81,6 +82,7 @@ impl ShellCompactionSampler {
         idle_timeout: Duration,
         wall_clock_budget_secs: u64,
         tool_choice: crate::util::config::CompactionToolChoice,
+        thinking_budget_tokens: u32,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Self {
         Self {
@@ -95,6 +97,7 @@ impl ShellCompactionSampler {
             idle_timeout,
             wall_clock_budget_secs,
             tool_choice,
+            thinking_budget_tokens,
             cancel,
             state: Mutex::new(SamplerState::default()),
         }
@@ -142,6 +145,7 @@ impl CompactionSampler for ShellCompactionSampler {
             self.idle_timeout,
             self.wall_clock_budget_secs,
             self.tool_choice,
+            self.thinking_budget_tokens,
             &self.cancel,
         )
         .await

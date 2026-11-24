@@ -177,6 +177,8 @@ pub(crate) struct CompactionConfig {
     /// When `true`, feed the summarizer the verbatim conversation instead of the lossy rewrite (the retry loop may still fall back).
     pub verbatim_input: bool,
     pub tool_choice: crate::util::config::CompactionToolChoice,
+    /// Thinking budget of the summary call on a Messages backend; `0` leaves thinking to the session.
+    pub thinking_budget_tokens: u32,
     pub prefire: PrefireState,
     /// Sticky once a forked session releases its inherited prefix under compaction pressure (see `run_compact_inner`), so it stops re-pinning it.
     pub prefix_released: AtomicBool,

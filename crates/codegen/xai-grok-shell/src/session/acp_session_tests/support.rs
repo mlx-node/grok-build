@@ -1290,6 +1290,7 @@ pub(crate) fn test_compaction_config(
         compaction_mode: xai_chat_state::CompactionMode::Transcript,
         verbatim_input: true,
         tool_choice: crate::util::config::CompactionToolChoice::Auto,
+        thinking_budget_tokens: crate::util::config::DEFAULT_COMPACTION_THINKING_BUDGET_TOKENS,
         prefire: crate::session::compaction_config::PrefireState::default(),
         prefix_released: std::sync::atomic::AtomicBool::new(false),
         cancel: Default::default(),

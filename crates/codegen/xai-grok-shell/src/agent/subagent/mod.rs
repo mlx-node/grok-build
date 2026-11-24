@@ -482,6 +482,17 @@ impl SubagentSpawnContext {
                 .and_then(|r| r.compaction_tool_choice.as_deref()),
         )
     }
+    pub(crate) fn resolve_compaction_thinking_budget_tokens(&self) -> u32 {
+        crate::util::config::resolve_compaction_thinking_budget_tokens_from(
+            crate::agent::config::env_string(
+                crate::util::config::ENV_COMPACTION_THINKING_BUDGET_TOKENS,
+            )
+            .as_deref(),
+            self.agent_config
+                .as_ref()
+                .and_then(|c| c.features.compaction_thinking_budget_tokens),
+        )
+    }
     pub(crate) fn snapshot_parent_compaction_pins(
         resolved_mode: xai_chat_state::CompactionMode,
         resolved_two_pass: bool,

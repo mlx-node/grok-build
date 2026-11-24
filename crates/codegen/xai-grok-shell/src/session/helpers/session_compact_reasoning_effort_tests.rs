@@ -85,6 +85,19 @@ async fn compaction_request_body(
     backend: ApiBackend,
     reasoning_effort: Option<ReasoningEffort>,
 ) -> serde_json::Value {
+    compaction_request_body_with_budget(
+        backend,
+        reasoning_effort,
+        crate::util::config::DEFAULT_COMPACTION_THINKING_BUDGET_TOKENS,
+    )
+    .await
+}
+
+async fn compaction_request_body_with_budget(
+    backend: ApiBackend,
+    reasoning_effort: Option<ReasoningEffort>,
+    thinking_budget_tokens: u32,
+) -> serde_json::Value {
     let (path, events): (&str, fn() -> Vec<Event>) = match backend {
         ApiBackend::ChatCompletions => ("/v1/chat/completions", chat_completions_stream),
         ApiBackend::Responses => ("/v1/responses", responses_stream),
@@ -147,6 +160,7 @@ async fn compaction_request_body(
         std::time::Duration::from_secs(30),
         0,
         crate::util::config::CompactionToolChoice::Auto,
+        thinking_budget_tokens,
         &tokio_util::sync::CancellationToken::new(),
     )
     .await
@@ -208,8 +222,8 @@ async fn messages_compaction_sends_session_reasoning_effort() {
         "{body:#}"
     );
     assert_eq!(
-        body.pointer("/thinking/type"),
-        Some(&json!("adaptive")),
+        body.pointer("/thinking"),
+        Some(&json!({"type": "enabled", "budget_tokens": 4096})),
         "{body:#}"
     );
 }
@@ -218,5 +232,29 @@ async fn messages_compaction_sends_session_reasoning_effort() {
 async fn messages_compaction_omits_unset_reasoning_effort() {
     let body = compaction_request_body(ApiBackend::Messages, None).await;
     assert!(absent(&body, "/output_config/effort"), "{body:#}");
+    assert_eq!(
+        body.pointer("/thinking"),
+        Some(&json!({"type": "enabled", "budget_tokens": 4096})),
+        "the summary call sets its own budget instead of the server's default: {body:#}"
+    );
+}
+
+#[tokio::test]
+async fn messages_compaction_budget_zero_leaves_thinking_to_the_session() {
+    let body = compaction_request_body_with_budget(ApiBackend::Messages, None, 0).await;
+    assert!(absent(&body, "/thinking"), "{body:#}");
+    let body =
+        compaction_request_body_with_budget(ApiBackend::Messages, Some(ReasoningEffort::High), 0)
+            .await;
+    assert_eq!(
+        body.pointer("/thinking/type"),
+        Some(&json!("adaptive")),
+        "{body:#}"
+    );
+}
+
+#[tokio::test]
+async fn messages_compaction_keeps_thinking_off_when_the_session_turned_it_off() {
+    let body = compaction_request_body(ApiBackend::Messages, Some(ReasoningEffort::None)).await;
     assert!(absent(&body, "/thinking"), "{body:#}");
 }

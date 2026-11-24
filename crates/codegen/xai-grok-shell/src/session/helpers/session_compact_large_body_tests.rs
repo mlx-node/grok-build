@@ -208,6 +208,7 @@ async fn responses_large_tool_result_images_fit_transport_limit() {
         std::time::Duration::from_secs(30),
         0,
         crate::util::config::CompactionToolChoice::Auto,
+        crate::util::config::DEFAULT_COMPACTION_THINKING_BUDGET_TOKENS,
         &tokio_util::sync::CancellationToken::new(),
     )
     .await

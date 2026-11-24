@@ -323,12 +323,16 @@ pub fn build_messages_request(req: &ConversationRequest) -> crate::messages::Mes
             schema: schema.clone(),
         });
 
-    // thinking is driven by reasoning_effort only, not by json_schema.
-    let thinking = effort
-        .as_ref()
-        .map(|_| crate::messages::ThinkingConfig::Adaptive {
+    // thinking is driven by reasoning_effort and an explicit budget only, not by json_schema.
+    let thinking = match (req.thinking_budget_tokens, &effort) {
+        (Some(budget_tokens), _) => {
+            Some(crate::messages::ThinkingConfig::Enabled { budget_tokens })
+        }
+        (None, Some(_)) => Some(crate::messages::ThinkingConfig::Adaptive {
             display: Some(crate::messages::ThinkingDisplay::Summarized),
-        });
+        }),
+        (None, None) => None,
+    };
 
     let output_config = if effort.is_some() || format.is_some() {
         Some(OutputConfig { effort, format })

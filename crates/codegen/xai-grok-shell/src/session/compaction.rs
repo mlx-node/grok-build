@@ -165,6 +165,7 @@ impl SessionActor {
             self.inference_idle_timeout,
             wall_clock_budget_secs,
             self.compaction.tool_choice,
+            self.compaction.thinking_budget_tokens,
             &cancel,
         )
         .await
@@ -1132,6 +1133,7 @@ impl SessionActor {
             self.inference_idle_timeout,
             wall_clock_budget_secs,
             self.compaction.tool_choice,
+            self.compaction.thinking_budget_tokens,
             cancel.clone(),
         );
         let observer =
