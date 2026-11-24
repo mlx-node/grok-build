@@ -114,9 +114,8 @@ pub(crate) fn resolve_auto_compact_threshold_percent_from_tiers(
         .unwrap_or(DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT)
 }
 
-/// Fleet p99 of successful compactions is ~181s (≈225s at 400K+ input).
-/// So 300s clears the legit tail with margin while cutting a runaway from the ~600s deadline.
-pub const DEFAULT_COMPACTION_WALL_CLOCK_BUDGET_SECS: u64 = 300;
+/// `0`: no wall clock. A local model can need 20+ minutes to read a long history and write the summary; the stream idle check still catches a stall.
+pub const DEFAULT_COMPACTION_WALL_CLOCK_BUDGET_SECS: u64 = 0;
 
 /// Below this, a configured budget is almost certainly a misconfig (fleet success p99 ~181s); logged at `warn`, not clamped.
 const COMPACTION_WALL_CLOCK_BUDGET_WARN_SECS: u64 = 120;
@@ -149,7 +148,7 @@ mod compaction_wall_clock_budget_tests {
     // Assumes GROK_COMPACTION_WALL_CLOCK_SECS is unset in the test env.
     #[test]
     fn default_global_disable_and_no_clamp() {
-        assert_eq!(resolve(None), 300); // client default
+        assert_eq!(resolve(None), 0); // client default: no wall clock
         assert_eq!(resolve(Some(450)), 450); // server global wins
         assert_eq!(resolve(Some(0)), 0); // 0 explicitly disables (no clamp)
         assert_eq!(resolve(Some(5)), 5); // low values pass through (warned, not clamped)

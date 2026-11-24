@@ -426,6 +426,10 @@ where
 #[path = "session_compact_compact_cancel_await_tests.rs"]
 mod compact_cancel_await_tests;
 
+#[cfg(test)]
+#[path = "session_compact_progress_idle_tests.rs"]
+mod progress_idle_tests;
+
 /// The summary call's own thinking budget; none when it is `0` or the session turned thinking off.
 /// Without it the summary takes the server's default budget (12,000 tokens on the local engine).
 fn compaction_thinking_budget(
@@ -750,6 +754,7 @@ pub(crate) async fn generate_session_compact(
             let mut stop_reason: Option<String> = None;
             let mut content = String::new();
             let mut last_progress_at = std::time::Instant::now();
+            let mut progress_marks = xai_grok_sampler::stream::messages::ProgressMarks::default();
             loop {
                 let idle_remaining = idle_timeout.saturating_sub(last_progress_at.elapsed());
                 let chunk_result = match next_stream_step(&mut stream, idle_remaining, cancel)
@@ -776,9 +781,9 @@ pub(crate) async fn generate_session_compact(
                 }
                 match chunk_result {
                     Ok(event) => {
-                        if !matches!(
+                        if xai_grok_sampler::stream::messages::messages_event_advances(
                             &event,
-                            xai_grok_sampling_types::messages::MessageStreamEvent::Ping { .. }
+                            &mut progress_marks,
                         ) {
                             last_progress_at = std::time::Instant::now();
                         }

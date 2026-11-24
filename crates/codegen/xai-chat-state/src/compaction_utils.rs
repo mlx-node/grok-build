@@ -80,6 +80,14 @@ pub fn strip_reasoning_blocks(conversation: Vec<ConversationItem>) -> Vec<Conver
         .filter(|item| !matches!(item, ConversationItem::Reasoning(_)))
         .collect()
 }
+/// Whether any reasoning item carries a provider signature.
+/// A Messages backend that signs rejects a mutated signed history; one that never signs (a local server) gets the same unsigned blocks on every normal turn.
+pub fn has_signed_reasoning(conversation: &[ConversationItem]) -> bool {
+    conversation.iter().any(|item| {
+        matches!(item, ConversationItem::Reasoning(r)
+            if r.encrypted_content.as_deref().is_some_and(|s| !s.is_empty()))
+    })
+}
 /// Replace `ContentPart::Image` entries with `"[image]"` so downstream
 /// consumers (summary model, segment store) don't carry megabytes of base64.
 pub(crate) fn strip_images(conversation: Vec<ConversationItem>) -> Vec<ConversationItem> {

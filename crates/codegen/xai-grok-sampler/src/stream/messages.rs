@@ -36,7 +36,7 @@ pub(crate) fn messages_event_has_meaningful_content(event: &MessageStreamEvent) 
 /// mlx-node fork: high-water marks of one request's `mlx_progress`. The server's ping timer keeps sending snapshots
 /// while inference stalls, so only a snapshot that moves a mark forward may reset the idle check.
 #[derive(Default)]
-struct ProgressMarks {
+pub struct ProgressMarks {
     phase_rank: Option<u8>,
     prefill_done: Option<u32>,
     generated_tokens: Option<u32>,
@@ -45,7 +45,7 @@ struct ProgressMarks {
 }
 
 impl ProgressMarks {
-    fn advance(&mut self, progress: &StreamProgress) -> bool {
+    pub fn advance(&mut self, progress: &StreamProgress) -> bool {
         fn raise<T: PartialOrd + Copy>(mark: &mut Option<T>, value: Option<T>) -> bool {
             match value {
                 Some(v) if mark.is_none_or(|m| v > m) => {
@@ -73,6 +73,17 @@ impl ProgressMarks {
             advanced = true;
         }
         advanced
+    }
+}
+
+/// mlx-node fork: whether `event` resets an idle check: model output, or a progress ping that moves a mark forward.
+/// Shared by the main stream and the compaction stream so a long prompt read never ends as an idle timeout on either.
+pub fn messages_event_advances(event: &MessageStreamEvent, marks: &mut ProgressMarks) -> bool {
+    match event {
+        MessageStreamEvent::Ping {
+            mlx_progress: Some(progress),
+        } => marks.advance(progress),
+        _ => messages_event_has_meaningful_content(event),
     }
 }
 
@@ -201,12 +212,7 @@ pub fn stream_messages<'a>(
 
             // mlx-node fork: only advancing progress resets the idle check
 
-            let event_has_content = match &event {
-                MessageStreamEvent::Ping { mlx_progress: Some(progress) } => {
-                    progress_marks.advance(progress)
-                }
-                _ => messages_event_has_meaningful_content(&event),
-            };
+            let event_has_content = messages_event_advances(&event, &mut progress_marks);
 
             match event {
                 MessageStreamEvent::MessageStart { message } => {

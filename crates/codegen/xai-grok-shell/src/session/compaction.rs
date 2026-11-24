@@ -25,11 +25,19 @@ use agent_client_protocol as acp;
 use std::sync::Arc;
 use xai_chat_state::compaction_image_context::CompactionImageContext;
 use xai_chat_state::compaction_utils::{
-    CompactedHistoryInput, CompactionAttempt, build_compacted_history, is_degenerate_summary,
-    prepare_conversation_for_verbatim_summarization, sanitize_compacted_history,
-    validate_compacted_history,
+    CompactedHistoryInput, CompactionAttempt, build_compacted_history, has_signed_reasoning,
+    is_degenerate_summary, prepare_conversation_for_verbatim_summarization,
+    sanitize_compacted_history, validate_compacted_history,
 };
 use xai_grok_sampling_types::{ApiBackend, ConversationItem};
+/// The summary request renders reasoning as the main loop does for this backend, so it shares the main loop's cached prefix.
+/// Only a Messages provider that signs reasoning loses it: it rejects a mutated signed history.
+pub(crate) fn summary_must_strip_reasoning(
+    api_backend: Option<&ApiBackend>,
+    conversation: &[ConversationItem],
+) -> bool {
+    api_backend == Some(&ApiBackend::Messages) && has_signed_reasoning(conversation)
+}
 /// Prefix on the early-guard failure payloads below; the user-facing normalizer strips it (the renderer prepends its own headline).
 const COMPACTION_FAILED_GUARD_PREFIX: &str = "Compaction failed: ";
 /// Human-readable "next fire" for a scheduled loop in the compaction reminder.
@@ -120,6 +128,9 @@ impl From<PrefireOutcome> for PrefirePass1Run {
         }
     }
 }
+#[cfg(test)]
+#[path = "compaction_prefix_alignment_tests.rs"]
+mod prefix_alignment_tests;
 #[cfg(test)]
 #[path = "compaction_two_pass_prefire_helper_tests.rs"]
 mod two_pass_prefire_helper_tests;
@@ -252,10 +263,10 @@ impl SessionActor {
             return PrefireOutcome::EmptySplit.into();
         }
         let sampling_cfg = self.chat_state_handle.get_sampling_config().await;
-        let strips = sampling_cfg
-            .as_ref()
-            .map(|c| c.api_backend == ApiBackend::Messages)
-            .unwrap_or(false);
+        let strips = summary_must_strip_reasoning(
+            sampling_cfg.as_ref().map(|c| &c.api_backend),
+            &conversation,
+        );
         let model_slug = sampling_cfg
             .as_ref()
             .map(|c| c.model.to_string())
@@ -953,10 +964,7 @@ impl SessionActor {
             );
             span.record("compaction_trigger", trigger_str);
         }
-        let summary_strips_reasoning = sampling_config
-            .as_ref()
-            .map(|c| c.api_backend == ApiBackend::Messages)
-            .unwrap_or(false);
+        let api_backend = sampling_config.as_ref().map(|c| c.api_backend.clone());
         let model_id = sampling_config.map(|c| c.model).unwrap_or_default();
         let compaction = xai_grok_telemetry::events::CompactionScope::begin(
             xai_grok_telemetry::events::CompactionBeginParams {
@@ -996,6 +1004,8 @@ impl SessionActor {
             self.chat_state_handle.get_system_message(),
             self.chat_state_handle.get_conversation(),
         );
+        let summary_strips_reasoning =
+            summary_must_strip_reasoning(api_backend.as_ref(), &full_conversation);
         let assembly_start = std::time::Instant::now();
         let segment_messages = if self.compaction.compaction_mode.writes_segments() {
             xai_chat_state::compaction_utils::prepare_conversation_for_segment(

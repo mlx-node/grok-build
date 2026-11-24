@@ -1212,3 +1212,20 @@ async fn absent_perf_fields_leave_response_perf_none() {
         other => panic!("expected Completed, got {other:?}"),
     }
 }
+
+// mlx-node fork
+#[test]
+fn messages_event_advances_counts_only_forward_progress() {
+    let mut marks = ProgressMarks::default();
+    let seen: Vec<bool> = [
+        progress_ping(100),
+        progress_ping(100),
+        progress_ping(200),
+        MessageStreamEvent::Ping { mlx_progress: None },
+        message_start(),
+    ]
+    .iter()
+    .map(|event| messages_event_advances(event, &mut marks))
+    .collect();
+    assert_eq!(seen, [true, false, true, false, true]);
+}
