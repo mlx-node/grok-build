@@ -356,6 +356,10 @@ impl MvpAgent {
                 }
             },
             plugin_registry: self.plugin_registry_handle.snapshot(),
+            parent_plugin_registry: parent_handle
+                .as_ref()
+                .and_then(|h| h.plugin_registry.clone()),
+            parent_human_rules: parent_handle.as_ref().and_then(|h| h.human_rules.clone()),
             models_manager: self.models_manager.clone(),
             file_tool_overrides: {
                 let cfg = self.cfg.borrow();

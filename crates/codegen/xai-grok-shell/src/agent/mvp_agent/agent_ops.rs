@@ -5003,6 +5003,10 @@ impl MvpAgent {
             system_prompt: agent_system_prompt,
             toolset,
         } = init;
+        handle.human_rules = match requested_system_prompt(session_meta, init_meta) {
+            Some(RequestedSystemPrompt::Rules(rules)) => Some(std::sync::Arc::from(rules)),
+            Some(RequestedSystemPrompt::Override(_)) | None => None,
+        };
         #[cfg(test)]
         super::test_hooks::pause_at(super::test_hooks::AttachPause::AfterSpawn).await;
         self.set_session_live_state(&session_info.id, SessionLiveState::IdleResident);

@@ -143,6 +143,10 @@ pub struct SessionHandle {
     pub allowed_subagent_types: Option<Vec<String>>,
     /// Hook registry for this session (snapshot from spawn time).
     pub hook_registry: Option<std::sync::Arc<xai_grok_hooks::discovery::HookRegistry>>,
+    /// Plugin registry for this session, including `_meta.pluginDirs` (snapshot from spawn time).
+    pub plugin_registry: Option<std::sync::Arc<xai_grok_agent::plugins::PluginRegistry>>,
+    /// The client's `_meta.rules` text.
+    pub human_rules: Option<std::sync::Arc<str>>,
     /// Typed workspace operations handle (agent sessions use local ops).
     pub workspace_ops: xai_grok_workspace::WorkspaceOps,
     /// Subagents inherit the parent's backend so background tasks and monitors survive the subagent's exit.

@@ -98,6 +98,8 @@ fn spawn_ctx(parent_cwd: PathBuf) -> SubagentSpawnContext {
         path_not_found_hints: false,
         tool_params_json: Default::default(),
         plugin_registry: None,
+        parent_plugin_registry: None,
+        parent_human_rules: None,
         models_manager: Default::default(),
         file_tool_overrides: None,
         agent_config: None,

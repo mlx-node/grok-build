@@ -1398,7 +1398,12 @@ pub(crate) async fn spawn_session_actor(
     drop(tool_setup_span);
     crate::waterfall::mark(&wf_sid, crate::waterfall::stage::SB_AGENT_BUILT);
     let prefix_build = spawn_step!("prefix_build");
-    let system_prompt = agent.system_prompt().to_string();
+    let system_prompt = match startup_hints.human_rules.as_deref() {
+        Some(rules) => {
+            crate::agent::mvp_agent::system_prompt::append_human_rules(agent.system_prompt(), rules)
+        }
+        None => agent.system_prompt().to_string(),
+    };
     let mut prompt_context = agent.prompt_context().clone();
     prompt_context.normalize_for_persistence();
     save_prompt_context(&session_info, &prompt_context);
@@ -2111,6 +2116,9 @@ pub(crate) async fn spawn_session_actor(
             );
         }
         session.emit_resolved_tool_overrides();
+        if session.startup_hints.workflow_session_start {
+            session.start_workflow_child().await;
+        }
         {
             let drainer_session = session.clone();
             let mut sampler_event_rx = sampler_event_rx;
@@ -2478,6 +2486,8 @@ pub(crate) async fn spawn_session_actor(
         session_default_agent_profile,
         allowed_subagent_types: allowed_subagent_types_for_handle,
         hook_registry: hook_registry_for_handle,
+        plugin_registry,
+        human_rules: None,
         workspace_ops: workspace_ops_for_handle,
         terminal_backend: Some(terminal_backend.clone()),
         tools_notification_handle: Some(tools_notification_handle.clone()),

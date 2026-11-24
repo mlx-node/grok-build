@@ -1065,3 +1065,139 @@ async fn started_wake_with_failed_metadata_write_preserves_prior_durable_artifac
         })
         .await;
 }
+
+/// Runs one real child spawn to completion against the mock model; returns its first agent request body.
+/// The registry is both the process snapshot (a task child's) and the parent session's (a workflow child's).
+async fn first_child_request_body(
+    owner: SubagentOwner,
+    parent_cwd: std::path::PathBuf,
+    registry: Option<std::sync::Arc<xai_grok_agent::plugins::PluginRegistry>>,
+) -> serde_json::Value {
+    use xai_grok_tools::implementations::grok_build::task::backend::{
+        ChannelBackend, SubagentBackend,
+    };
+    use xai_grok_tools::implementations::grok_build::task::coordinator::{
+        CoordinatorConfig, SubagentCoordinator,
+    };
+    const TASK: &str = "K1 probe task: list the folder.";
+    let meta = tempfile::TempDir::new().expect("meta dir");
+    let server = xai_grok_test_support::MockInferenceServer::start()
+        .await
+        .expect("mock server");
+    server.set_response("probe output");
+    let mut ctx = ctx_with_toggle(HashMap::new());
+    configure_completion_harness(
+        &mut ctx,
+        &server,
+        RunShellChildHarnessConfig::new(meta.path().to_path_buf(), InitialAttemptBehavior::Normal),
+    );
+    ctx.parent_cwd = parent_cwd;
+    ctx.plugin_registry = registry.clone();
+    ctx.parent_plugin_registry = registry;
+    let (parent_cmd_tx, parent_cmd_rx) = mpsc::unbounded_channel();
+    ctx.parent_cmd_tx = Some(parent_cmd_tx);
+    let usage_ack = tokio::task::spawn_local(acknowledge_parent_usage(parent_cmd_rx));
+    let (gateway, _gateway_rx) = test_gateway_with_receiver();
+    let (command_tx, command_rx) = SubagentCoordinator::<RunShellChildTestRunner>::channel();
+    let coordinator = tokio::task::spawn_local(
+        SubagentCoordinator::from_channel(
+            command_rx,
+            RunShellChildTestRunner::new([ctx], false, gateway),
+            CoordinatorConfig::default(),
+        )
+        .run(),
+    );
+    let backend = ChannelBackend::for_coordinator_session(command_tx, "setup-parent");
+    let mut request = auto_wake_test_request(&uuid::Uuid::now_v7().to_string());
+    request.prompt = TASK.to_owned();
+    request.owner = owner;
+    let result = backend.spawn(request, None).await.expect("child spawn");
+    assert!(result.success, "child run: {:?}", result.output);
+    drop(backend);
+    coordinator.await.expect("coordinator");
+    usage_ack.abort();
+    server
+        .request_bodies()
+        .into_iter()
+        .filter(|body| {
+            body.pointer("/tool_choice/name")
+                .and_then(|name| name.as_str())
+                != Some("session_title")
+        })
+        .find(|body| body.to_string().contains(TASK))
+        .expect("the child's first agent request reached the model")
+}
+
+/// Mutation that turns it red: drop the `start_workflow_child` call in `spawn_session_actor`
+/// (the workflow child's first request then has no skill path).
+#[tokio::test(flavor = "current_thread")]
+async fn workflow_child_first_request_lists_parent_skills() {
+    use xai_grok_agent::plugins::SharedPluginRegistryHandle;
+    use xai_grok_agent::plugins::discovery::DiscoveryConfig;
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let workdir = tempfile::TempDir::new().expect("workdir");
+            let plugin_dir = workdir.path().join("probe-plugin");
+            let skill_dir = plugin_dir.join("skills").join("probe-web");
+            std::fs::create_dir_all(&skill_dir).expect("plugin skill dir");
+            std::fs::write(plugin_dir.join("plugin.json"), r#"{"name":"probe-plugin"}"#)
+                .expect("plugin manifest");
+            std::fs::write(
+                skill_dir.join("SKILL.md"),
+                "---\nname: probe-web\ndescription: Searches the web.\n---\n\nRun the search.\n",
+            )
+            .expect("plugin skill");
+            let registry = SharedPluginRegistryHandle::new(None, Vec::new()).build_for_cwd(
+                workdir.path(),
+                &DiscoveryConfig {
+                    cli_plugin_dirs: Vec::new(),
+                    config_paths: Vec::new(),
+                    disabled: Vec::new(),
+                    enabled: Vec::new(),
+                },
+                &[plugin_dir],
+                false,
+            );
+            assert!(registry.is_some(), "session plugin dir must build a registry");
+            let skill_path = "probe-plugin/skills/probe-web/SKILL.md";
+            let input_with_skill = |body: &serde_json::Value| -> Vec<(String, usize)> {
+                body["input"]
+                    .as_array()
+                    .expect("responses input")
+                    .iter()
+                    .filter(|item| item.to_string().contains(skill_path))
+                    .map(|item| {
+                        (
+                            item["role"].as_str().unwrap_or_default().to_owned(),
+                            item.to_string().matches(skill_path).count(),
+                        )
+                    })
+                    .collect()
+            };
+
+            let workflow_body = first_child_request_body(
+                SubagentOwner::workflow("wf_k1"),
+                workdir.path().to_path_buf(),
+                registry.clone(),
+            )
+            .await;
+            assert_eq!(
+                input_with_skill(&workflow_body),
+                vec![("user".to_owned(), 1)],
+                "a workflow child's first request lists the parent's skill once, in a user reminder: {workflow_body}"
+            );
+
+            let task_body = first_child_request_body(
+                SubagentOwner::Task,
+                workdir.path().to_path_buf(),
+                registry,
+            )
+            .await;
+            assert!(
+                input_with_skill(&task_body).is_empty(),
+                "a task child keeps its old start: {task_body}"
+            );
+        })
+        .await;
+}

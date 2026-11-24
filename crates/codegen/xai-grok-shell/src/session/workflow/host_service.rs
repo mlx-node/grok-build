@@ -487,17 +487,6 @@ impl HostService {
 
         let id = uuid::Uuid::now_v7().to_string();
         let explicit_label = opts.label.clone();
-        let capability_mode = match opts.capability_mode.as_deref() {
-            None => None,
-            Some(s) => Some(
-                serde_json::from_value(serde_json::Value::String(s.to_string())).map_err(|_| {
-                    HostError::Failed(format!(
-                        "invalid capability_mode '{s}' (expected read-only, read-write, \
-                             execute, or all)"
-                    ))
-                })?,
-            ),
-        };
         let isolation = opts
             .isolation_worktree
             .then_some(xai_tool_types::SubagentIsolationMode::Worktree);
@@ -555,7 +544,6 @@ impl HostService {
                         model_override_provenance: ModelOverrideProvenance::Tool {
                             selection: self.params.task_model_selection.get(),
                         },
-                        capability_mode,
                         isolation,
                         output_schema: None,
                         ..Default::default()

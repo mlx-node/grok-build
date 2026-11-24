@@ -971,7 +971,8 @@ fn explicit_startup_hints(
 }
 use xai_chat_state::conversation_util::replace_or_insert_system_head;
 use crate::agent::mvp_agent::system_prompt::{
-    build_spawn_system_prompt, system_prompt_override_from_meta,
+    RequestedSystemPrompt, build_spawn_system_prompt, requested_system_prompt,
+    system_prompt_override_from_meta,
 };
 /// How a client's `systemPromptOverride` and `rules` `_meta` keys shape a new session's system prompt.
 pub mod system_prompt {
@@ -994,10 +995,13 @@ pub mod system_prompt {
         match requested_system_prompt(session_meta, init_meta) {
             Some(RequestedSystemPrompt::Override(prompt)) => prompt.to_owned(),
             Some(RequestedSystemPrompt::Rules(rules)) => {
-                format!("{agent_system_prompt}\n\n<human_rules>\n{rules}\n</human_rules>")
+                append_human_rules(agent_system_prompt, rules)
             }
             None => agent_system_prompt.to_owned(),
         }
+    }
+    pub(crate) fn append_human_rules(prompt: &str, rules: &str) -> String {
+        format!("{prompt}\n\n<human_rules>\n{rules}\n</human_rules>")
     }
     /// A non-blank `systemPromptOverride` wins over `rules`. Each key is read from `session_meta` first, then `init_meta`.
     pub fn requested_system_prompt<'a>(

@@ -630,6 +630,13 @@ pub struct StartupHints {
     /// Parent project cwd for child/worktree overlay kill-switch. Not on the wire.
     #[serde(skip)]
     pub parent_cwd: Option<PathBuf>,
+    /// The parent's `_meta.rules`, appended to a workflow child's system prompt. Not on the wire.
+    #[serde(skip)]
+    pub human_rules: Option<std::sync::Arc<str>>,
+    /// A fresh (not forked, not resumed) workflow child: it gets the skills listing a main session
+    /// gets from `Initialize`, which children never receive. Not on the wire.
+    #[serde(skip)]
+    pub workflow_session_start: bool,
     /// Only `"alwaysAllow"` is honored: would-be prompts resolve as allow at the manager's dispatch gate.
     /// Clamped off by the managed always-approve pin; a configured `defaultMode` wins.
     /// Unlike `yoloMode` / `autoMode`, a warm re-attach to an already-resident actor does NOT re-apply it.

@@ -1,5 +1,6 @@
 use super::system_prompt::{
-    RequestedSystemPrompt, read_session_or_init_meta_str, requested_system_prompt,
+    RequestedSystemPrompt, append_human_rules, read_session_or_init_meta_str,
+    requested_system_prompt,
 };
 use super::test_hooks::{AttachPause, with_pause_at};
 use super::*;
@@ -1043,6 +1044,18 @@ fn blank_override_is_no_override() {
     }
 }
 #[test]
+fn append_human_rules_wraps_the_rules_block() {
+    assert_eq!(
+        append_human_rules("A", "r"),
+        "A\n\n<human_rules>\nr\n</human_rules>"
+    );
+    let init = serde_json::json!({ "rules": "r" });
+    assert_eq!(
+        build_spawn_system_prompt(None, init.as_object(), "A"),
+        append_human_rules("A", "r")
+    );
+}
+#[test]
 fn enqueue_replace_system_prompt_override_sends_when_present() {
     use crate::session::SessionCommand;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1285,6 +1298,8 @@ pub(super) fn make_test_handle(
         session_default_agent_profile: None,
         allowed_subagent_types: None,
         hook_registry: None,
+        plugin_registry: None,
+        human_rules: None,
         workspace_ops: xai_grok_workspace::WorkspaceOps::for_test(),
         terminal_backend: None,
         tools_notification_handle: None,

@@ -77,5 +77,8 @@ mod builtin_tests {
         assert!(script.contains("full_report += \"\\n## Sources\\n\""));
         assert!(script.contains("report: chat_report"));
         assert!(!script.contains("chat_report += \"\\n## Sources\\n\""));
+        assert!(!script.contains("capability_mode"));
+        assert!(!script.contains("read-only tools"));
+        assert!(script.contains("installed web skills"));
     }
 }
