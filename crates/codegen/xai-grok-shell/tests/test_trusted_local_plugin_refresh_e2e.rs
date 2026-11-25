@@ -130,10 +130,8 @@ fn trusted_local_refresh_surfaces_new_agent_via_discovery() {
     std::fs::create_dir_all(&cwd).unwrap();
     let handle = SharedPluginRegistryHandle::new(None, Vec::new());
     let config = DiscoveryConfig {
-        cli_plugin_dirs: Vec::new(),
-        config_paths: Vec::new(),
-        disabled: Vec::new(),
         enabled: vec!["demo-plugin".to_string()],
+        ..DiscoveryConfig::default()
     };
     let plugin_registry = handle
         .refresh_and_build_for_cwd(&cwd, &config, &[], true)
@@ -164,12 +162,7 @@ fn trusted_local_refresh_surfaces_new_agent_via_discovery() {
     write_agent(&plugin_dir, "helper", "helper-agent", "session-scoped");
 
     let session_handle = SharedPluginRegistryHandle::new(None, Vec::new());
-    let session_config = DiscoveryConfig {
-        cli_plugin_dirs: Vec::new(),
-        config_paths: Vec::new(),
-        disabled: Vec::new(),
-        enabled: Vec::new(),
-    };
+    let session_config = DiscoveryConfig::default();
     let session_dirs = vec![plugin_dir.clone()];
     let registry = session_handle
         .build_for_cwd(&cwd, &session_config, &session_dirs, true)
@@ -264,10 +257,8 @@ async fn headless_session_refreshes_trusted_local_plugin_and_writes_session_json
     // The real binary's session start refreshed the on-disk snapshot
     // Rebuild the registry for the workdir and assert the new agent shows up in `/agents`, the same proof as the library test
     let config = DiscoveryConfig {
-        cli_plugin_dirs: Vec::new(),
-        config_paths: Vec::new(),
-        disabled: Vec::new(),
         enabled: vec!["demo-plugin".to_string()],
+        ..DiscoveryConfig::default()
     };
     let plugin_registry = SharedPluginRegistryHandle::new(None, Vec::new())
         .build_for_cwd(workdir.workspace(), &config, &[], true)

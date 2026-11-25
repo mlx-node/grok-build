@@ -868,6 +868,7 @@ pub fn load_cli_plugin_registry(cwd: &std::path::Path) -> xai_grok_agent::plugin
             cwd,
             trust: xai_grok_hooks::trust::Trust::from_verdict(project_trusted),
             claude_import: crate::claude_import::import_marker(),
+            compat_env: &xai_grok_config::compat::CompatEnv::from_process(),
         },
     );
     let discovered = xai_grok_agent::plugins::discover_plugins(

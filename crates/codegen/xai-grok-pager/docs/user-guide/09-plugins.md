@@ -414,7 +414,7 @@ A skill or command may ship a **helper script** next to its SKILL.md (for exampl
 
 ### Where Grok looks for plugins
 
-Grok discovers plugins from these locations, in priority order. The `.claude/plugins/` equivalents also work, and when two plugins share a name the higher-priority one wins:
+Grok discovers plugins from these locations, in priority order. The `.claude/plugins/` equivalents also work unless `[compat.claude] plugins = false` or `GROK_CLAUDE_PLUGINS_ENABLED=false`, and when two plugins share a name the higher-priority one wins:
 
 | Location | Scope | Trust |
 |----------|-------|-------|

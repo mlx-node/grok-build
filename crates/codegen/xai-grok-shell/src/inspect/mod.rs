@@ -413,6 +413,7 @@ async fn build_report(cwd: &Path) -> InspectReport {
             cwd,
             trust: xai_grok_hooks::trust::Trust::from_verdict(project_trusted),
             claude_import: crate::claude_import::import_marker(),
+            compat_env: &xai_grok_config::compat::CompatEnv::from_process(),
         },
     );
     // Project plugins gate on the same folder-trust verdict as hooks and the live session/doctor sites

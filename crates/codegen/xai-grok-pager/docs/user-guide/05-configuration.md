@@ -415,6 +415,7 @@ agents = true     # scan ~/.claude/ and <dir>/.claude/CLAUDE*.md
 mcps = true       # scan ~/.claude.json for MCP servers
 hooks = true      # scan ~/.claude/settings.json for hooks
 sessions = true   # staged; no scanner consumer yet
+plugins = true    # Claude plugins and <dir>/.claude/agents/, ~/.claude/agents/
 
 [compat.codex]
 sessions = true   # staged; no scanner consumer yet
@@ -423,6 +424,8 @@ sessions = true   # staged; no scanner consumer yet
 Codex's `skills`, `rules`, `agents`, `mcps`, and `hooks` cells are reserved and currently inert — they do not enable `.codex` discovery.
 
 For Claude and Cursor, `rules` and `agents` are independent: turning off named instruction files doesn't disable the home or project rules directory, and turning off rules doesn't disable named files. Claude's `agents` cell gates home-level `~/.claude/` named files and project `<dir>/.claude/CLAUDE*.md`; generic top-level `Claude.md`, `CLAUDE.md`, and `CLAUDE.local.md` stay recognized. Project rule paths are scanned at every directory from the repo root down to the current one.
+
+Claude's `plugins` cell gates every Claude plugin source: project `.claude/plugins/`, `~/.claude/plugins/`, `~/.claude/plugins/installed_plugins.json`, the marketplaces in `.claude/settings.json` and `known_marketplaces.json`, and the `enabledPlugins` list in `~/.claude/settings.json`. It also gates subagent definitions in `.claude/agents/` and `~/.claude/agents/`. Plugins from `--plugin-dir`, `_meta.pluginDirs`, `.grok/plugins/`, `~/.grok/plugins/`, Grok installs, and `[plugins].paths` still load.
 
 Each cell can be set via environment variable or `config.toml`; see the environment-variables reference for the names. Resolution: env var > config.toml > default (on).
 

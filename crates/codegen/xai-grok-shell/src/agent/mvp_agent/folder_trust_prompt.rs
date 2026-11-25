@@ -304,6 +304,7 @@ async fn reload_project_servers_after_grant(ctx: ReloadAfterGrant<'_>) {
                 cwd: session_cwd,
                 trust: xai_grok_hooks::trust::Trust::from_verdict(project_trusted),
                 claude_import: crate::claude_import::import_marker(),
+                compat_env: &xai_grok_config::compat::CompatEnv::from_process(),
             },
         );
         // Session `_meta.pluginDirs` are re-merged by the receiving actor (`preserve_session_plugin_dirs` on `ReloadPlugins`)

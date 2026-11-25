@@ -1,5 +1,5 @@
 //! Vendor compatibility configuration for third-party agent surfaces
-//! (skills, rules, agents, MCPs, hooks, sessions).
+//! (skills, rules, agents, MCPs, hooks, sessions, plugins).
 //!
 //! This module owns the canonical cell registry used by runtime resolution and diagnostics
 //! (env var → config TOML → remote setting → default ON).
@@ -33,6 +33,7 @@ pub enum CompatSurface {
     Mcps,
     Hooks,
     Sessions,
+    Plugins,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompatRemoteKey {
@@ -101,7 +102,7 @@ impl CompatCell {
     }
 }
 
-pub const COMPAT_CELLS: [CompatCell; 18] = [
+pub const COMPAT_CELLS: [CompatCell; 19] = [
     CompatCell::new(
         CompatVendor::Cursor,
         CompatSurface::Skills,
@@ -174,6 +175,13 @@ pub const COMPAT_CELLS: [CompatCell; 18] = [
         "GROK_CLAUDE_SESSIONS_ENABLED",
         Some(CompatRemoteKey::ClaudeSessions),
     ),
+    // No remote key: the plugin and agent loaders that read this cell hold no remote settings.
+    CompatCell::new(
+        CompatVendor::Claude,
+        CompatSurface::Plugins,
+        "GROK_CLAUDE_PLUGINS_ENABLED",
+        None,
+    ),
     CompatCell::new(
         CompatVendor::Codex,
         CompatSurface::Skills,
@@ -223,6 +231,7 @@ pub struct VendorCompatToml {
     pub mcps: Option<bool>,
     pub hooks: Option<bool>,
     pub sessions: Option<bool>,
+    pub plugins: Option<bool>,
 }
 
 impl VendorCompatToml {
@@ -234,6 +243,7 @@ impl VendorCompatToml {
             CompatSurface::Mcps => self.mcps,
             CompatSurface::Hooks => self.hooks,
             CompatSurface::Sessions => self.sessions,
+            CompatSurface::Plugins => self.plugins,
         }
     }
 }
@@ -268,6 +278,7 @@ pub struct VendorCompat {
     pub mcps: bool,
     pub hooks: bool,
     pub sessions: bool,
+    pub plugins: bool,
 }
 
 impl VendorCompat {
@@ -279,6 +290,7 @@ impl VendorCompat {
             CompatSurface::Mcps => self.mcps,
             CompatSurface::Hooks => self.hooks,
             CompatSurface::Sessions => self.sessions,
+            CompatSurface::Plugins => self.plugins,
         }
     }
 
@@ -290,6 +302,7 @@ impl VendorCompat {
             CompatSurface::Mcps => self.mcps = value,
             CompatSurface::Hooks => self.hooks = value,
             CompatSurface::Sessions => self.sessions = value,
+            CompatSurface::Plugins => self.plugins = value,
         }
     }
 }
@@ -303,6 +316,7 @@ impl Default for VendorCompat {
             mcps: true,
             hooks: true,
             sessions: true,
+            plugins: true,
         }
     }
 }
@@ -618,6 +632,25 @@ pub fn resolve_compat_hooks(
         UnreadableCellPolicy::TreatAsUnset,
     );
     resolve_compat_cells(configured, env, remote).hooks()
+}
+
+/// The Claude plugins cell for a plugin or agent loader; an unreadable cell is treated as unset.
+pub fn resolve_compat_claude_plugins(
+    effective_config: Option<&toml::Value>,
+    env: &CompatEnv,
+) -> bool {
+    let configured = configured_surface(
+        effective_config,
+        CompatSurface::Plugins,
+        UnreadableCellPolicy::TreatAsUnset,
+    );
+    resolve_compat_cells(configured, env, None).claude.plugins
+}
+
+/// [`resolve_compat_claude_plugins`] from the process env and the effective config on disk.
+pub fn claude_plugins_enabled_in_process() -> bool {
+    let effective_config = crate::effective_config::load_effective_config().ok();
+    resolve_compat_claude_plugins(effective_config.as_ref(), &CompatEnv::from_process())
 }
 
 #[cfg(test)]

@@ -1962,6 +1962,7 @@ impl MvpAgent {
                 cwd: cwd.as_path(),
                 trust: xai_grok_hooks::trust::Trust::from_verdict(project_trusted),
                 claude_import: crate::claude_import::import_marker(),
+                compat_env: &xai_grok_config::compat::CompatEnv::from_process(),
             });
             let registry = self
                 .plugin_registry_handle
