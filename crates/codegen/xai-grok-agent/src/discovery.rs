@@ -484,7 +484,9 @@ fn by_name_in_cwd_with_plugins_and_home(
             && plugin.enabled
         {
             for agent_dir in &plugin.agent_dirs {
-                let agent_file = agent_dir.join(format!("{agent_name}.md"));
+                let Some(agent_file) = agent_file_in(agent_dir, agent_name) else {
+                    continue;
+                };
                 if agent_file.is_file()
                     && let Some(mut def) = load_plugin_agent_definition(plugin, &agent_file)
                 {
@@ -499,7 +501,9 @@ fn by_name_in_cwd_with_plugins_and_home(
             Vec::new();
         for plugin in registry.enabled_plugins() {
             for agent_dir in &plugin.agent_dirs {
-                let agent_file = agent_dir.join(format!("{name}.md"));
+                let Some(agent_file) = agent_file_in(agent_dir, name) else {
+                    continue;
+                };
                 if agent_file.is_file() {
                     matches.push((plugin, agent_file));
                 }
@@ -598,7 +602,9 @@ fn load_project_definition_by_name(
         if !compat_allows(&agents_dir, claude) {
             continue;
         }
-        let agent_file = agents_dir.join(format!("{name}.md"));
+        let Some(agent_file) = agent_file_in(&agents_dir, name) else {
+            continue;
+        };
         if let Some(def) = load_definition_from_path(
             &agent_file,
             name,
@@ -617,8 +623,19 @@ fn load_definition_by_name(
     error_message: &str,
     scope_override: Option<AgentScope>,
 ) -> Option<AgentDefinition> {
-    let agent_file = dir.join(format!("{}.md", name));
+    let agent_file = agent_file_in(dir, name)?;
     load_definition_from_path(&agent_file, name, error_message, scope_override)
+}
+
+/// `<dir>/<name>.md`, or `None` when `<name>.md` is not a single file name: a name with a separator, `..`,
+/// a root, or a drive prefix would resolve outside `dir`, past the compat gate on which dirs load.
+fn agent_file_in(dir: &Path, name: &str) -> Option<PathBuf> {
+    let file_name = format!("{name}.md");
+    let mut components = Path::new(&file_name).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(_)), None) => Some(dir.join(file_name)),
+        _ => None,
+    }
 }
 
 fn load_definition_from_path(
@@ -1087,6 +1104,56 @@ mod tests {
         assert_eq!(None, by_name("pc", false));
         assert_eq!(None, by_name("uc", false));
         assert_eq!(Some("User Grok".to_owned()), by_name("shared", false));
+    }
+
+    #[test]
+    fn by_name_lookups_stay_inside_their_agent_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path().join("workspace");
+        let home = tmp.path().join("home");
+        let grok_home = home.join(".grok");
+        let project_grok = cwd.join(".grok").join("agents");
+        let project_claude = cwd.join(".claude").join("agents");
+        let user_grok = grok_home.join("agents");
+        let user_claude = home.join(".claude").join("agents");
+        let plugin_agents = tmp.path().join("plugin").join("agents");
+        for dir in [
+            &project_grok,
+            &project_claude,
+            &user_grok,
+            &user_claude,
+            &plugin_agents,
+        ] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        write_agent_file(&project_grok, "pg.md", "pg", "Project Grok");
+        write_agent_file(&project_claude, "pc.md", "pc", "Project Claude");
+        write_agent_file(&user_claude, "uc.md", "uc", "User Claude");
+        let registry = make_plugin_registry("plugin-one", PluginScope::User, vec![plugin_agents]);
+
+        let lookup = |name: &str| {
+            by_name_in_cwd_with_plugins_and_home(
+                name,
+                &cwd,
+                Some(&registry),
+                Some(&home),
+                Some(&grok_home),
+                false,
+            )
+            .map(|d| d.description)
+        };
+        let absolute = user_claude.join("uc");
+        let escaped: Vec<&str> = [
+            "../../.claude/agents/pc",
+            "../../.claude/agents/uc",
+            absolute.to_str().unwrap(),
+            "plugin-one:../../workspace/.claude/agents/pc",
+        ]
+        .into_iter()
+        .filter(|name| lookup(name).is_some())
+        .collect();
+        assert_eq!(Vec::<&str>::new(), escaped);
+        assert_eq!(Some("Project Grok".to_owned()), lookup("pg"));
     }
 
     #[test]
