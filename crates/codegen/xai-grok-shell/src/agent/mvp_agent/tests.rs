@@ -5148,7 +5148,8 @@ fn shutdown_generation_invalidates_stale_restart() {
         );
     });
 }
-/// `spawn_gateway_bridge` uses `tokio::task::spawn_local`.
+/// `spawn_gateway_bridge` uses `tokio::task::spawn_local`. The body is boxed: on the test thread's stack the
+/// session load futures overflow it in debug builds.
 fn run_local_for_bridge_test<F, Fut, T>(body: F) -> T
 where
     F: FnOnce() -> Fut,
@@ -5159,7 +5160,7 @@ where
         .build()
         .expect("test runtime must build");
     let local = tokio::task::LocalSet::new();
-    local.block_on(&rt, body())
+    local.block_on(&rt, Box::pin(body()))
 }
 #[test]
 fn chat_session_spawn_options_matches_thin_profile() {

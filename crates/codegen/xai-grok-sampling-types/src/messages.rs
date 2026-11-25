@@ -34,6 +34,15 @@ pub struct MessagesRequest {
     pub output_config: Option<OutputConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Metadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_body: Option<ExtraBody>,
+}
+
+/// mlx-node fork: the local MLX server reads the level from `extra_body.reasoning_effort` and never from `output_config.effort`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtraBody {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

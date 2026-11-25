@@ -1508,6 +1508,60 @@ async fn model_switch_preserves_existing_conversation_group() {
         .await;
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn model_switch_reads_the_extra_body_capability_of_the_new_model_from_the_catalog() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (actor, _rx) = make_actor_with_method_and_credentials(
+                None,
+                "cached_token",
+                xai_chat_state::AuthType::SessionToken,
+                "k".to_string(),
+            )
+            .await;
+            let base_url = "http://127.0.0.1:1/v1";
+            for (model, mlx) in [("mlx-qwen", true), ("plain-qwen", false)] {
+                let mut entry = crate::agent::config::ModelEntry::fallback(
+                    model,
+                    &crate::agent::config::EndpointsConfig::default(),
+                );
+                entry.info.api_backend = xai_grok_sampling_types::ApiBackend::Messages;
+                entry.info.base_url = base_url.to_owned();
+                entry.info.extra_body_reasoning_effort = mlx;
+                entry.info.discovery_base_url = Some(base_url.to_owned());
+                actor.models_manager.insert_test_entry(model, entry);
+            }
+            for (model, mlx) in [
+                ("mlx-qwen", true),
+                ("plain-qwen", false),
+                ("mlx-qwen", true),
+            ] {
+                let cfg = xai_grok_sampler::SamplerConfig {
+                    base_url: base_url.to_string(),
+                    model: model.to_string(),
+                    api_backend: xai_grok_sampling_types::ApiBackend::Messages,
+                    context_window: 256_000,
+                    ..Default::default()
+                };
+                actor
+                    .handle_set_session_model(config_only_model_switch(cfg))
+                    .await
+                    .expect("model switch succeeds");
+                let full = actor.reconstruct_full_config().await;
+                let gate = full
+                    .extra_body_effort_gate
+                    .expect("every session request config carries the gate");
+                assert_eq!(
+                    gate.reads_extra_body_effort(&full.model, &full.base_url),
+                    mlx,
+                    "{model}"
+                );
+            }
+        })
+        .await;
+}
+
 /// Regression: `handle_set_session_model` must invalidate the memo even when `model_id` is unchanged.
 /// Otherwise a config edit that turns the current model into a per-model BYOK model on a third-party `base_url` keeps serving the stale `NotByok`.
 /// That leaves the gate active and leaks the OIDC token to the third-party host.

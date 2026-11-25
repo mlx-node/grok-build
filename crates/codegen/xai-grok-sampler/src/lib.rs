@@ -39,8 +39,9 @@ pub use attribution::{
 };
 pub use client::{ApiBackend, SamplingClient, user_agent_string_for};
 pub use config::{
-    AuthScheme, BearerResolver, HeaderInjector, OriginClientInfo, RequestCompression, RetryPolicy,
-    SamplerConfig, SharedBearerResolver, SharedHeaderInjector,
+    AuthScheme, BearerResolver, ExtraBodyEffortGate, HeaderInjector, OriginClientInfo,
+    RequestCompression, RetryPolicy, SamplerConfig, SharedBearerResolver,
+    SharedExtraBodyEffortGate, SharedHeaderInjector,
 };
 pub use doom_loop::DoomLoopSignalCollector;
 pub use events::{

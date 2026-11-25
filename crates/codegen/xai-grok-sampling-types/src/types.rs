@@ -800,6 +800,16 @@ impl ReasoningEffort {
             _ => Some(self.into()),
         }
     }
+
+    /// mlx-node fork: the value for the Messages request's `extra_body.reasoning_effort`; the MLX server rejects `minimal` with a 400.
+    pub fn to_messages_extra_body(self) -> Option<&'static str> {
+        match self {
+            Self::Minimal => None,
+            Self::None | Self::Low | Self::Medium | Self::High | Self::Xhigh | Self::Max => {
+                Some(self.into())
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for ReasoningEffort {

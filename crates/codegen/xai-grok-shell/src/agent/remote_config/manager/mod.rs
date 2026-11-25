@@ -542,6 +542,25 @@ impl ModelsManager {
         .unwrap_or(false)
     }
 
+    /// mlx-node fork: whether `base_url` reads the effort of a Messages request for `model` from `extra_body.reasoning_effort`.
+    /// Only when `base_url` itself listed `model` as an mlx-node engine row with levels; any other endpoint answers 400 to the field.
+    pub(crate) fn reads_extra_body_effort(&self, model: &str, base_url: &str) -> bool {
+        let base_url = base_url.trim_end_matches('/');
+        self.inner.catalog.read().models.values().any(|e| {
+            e.info.extra_body_reasoning_effort
+                && e.info.has_model_id(model)
+                && e.info
+                    .discovery_base_url
+                    .as_deref()
+                    .is_some_and(|listed_at| listed_at.trim_end_matches('/') == base_url)
+        })
+    }
+
+    /// [`Self::reads_extra_body_effort`] against this catalog as it is when each request is built.
+    pub(crate) fn extra_body_effort_gate(&self) -> xai_grok_sampler::SharedExtraBodyEffortGate {
+        Arc::new(CatalogExtraBodyEffortGate(self.clone()))
+    }
+
     pub(crate) fn model_supports_reasoning_effort(&self, model_id: &str) -> bool {
         self.with_catalog_entry(model_id, |e| e.info().supports_reasoning_effort)
             .unwrap_or(false)
@@ -1041,16 +1060,19 @@ impl ModelsManager {
         let credentials =
             resolve_credentials(current_model, session_auth.as_ref().map(|a| a.key.as_str()));
 
-        sampling_config_for_model(
-            current_model,
-            credentials,
-            config.endpoints.alpha_test_key.clone(),
-            config.client_version.clone(),
-            xai_grok_cloud_config::managed_config::resolve_deployment_id(
-                config.endpoints.deployment_key.as_deref(),
-            ),
-            None,
-        )
+        SamplingConfig {
+            extra_body_effort_gate: Some(self.extra_body_effort_gate()),
+            ..sampling_config_for_model(
+                current_model,
+                credentials,
+                config.endpoints.alpha_test_key.clone(),
+                config.client_version.clone(),
+                xai_grok_cloud_config::managed_config::resolve_deployment_id(
+                    config.endpoints.deployment_key.as_deref(),
+                ),
+                None,
+            )
+        }
     }
 
     /// The disk-cache scope for this manager's live endpoints, fetch auth, and
@@ -1370,6 +1392,20 @@ impl ModelsManager {
             );
             self.set_current_model_id_internal(new_id);
         }
+    }
+}
+
+struct CatalogExtraBodyEffortGate(ModelsManager);
+
+impl std::fmt::Debug for CatalogExtraBodyEffortGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CatalogExtraBodyEffortGate")
+    }
+}
+
+impl xai_grok_sampler::ExtraBodyEffortGate for CatalogExtraBodyEffortGate {
+    fn reads_extra_body_effort(&self, model: &str, base_url: &str) -> bool {
+        self.0.reads_extra_body_effort(model, base_url)
     }
 }
 

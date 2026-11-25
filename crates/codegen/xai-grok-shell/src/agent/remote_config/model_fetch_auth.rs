@@ -58,6 +58,10 @@ impl ModelFetchAuth {
     }
 }
 
+/// Rows this build caches carry the mlx-node `extra_body` capability; tag releases keep one compiled version, so without
+/// this mark a catalog cached before it loads as fresh rows that lack the capability.
+const MODELS_CACHE_ROWS: &str = "rows=discovery-base";
+
 pub(in crate::agent::remote_config) fn resolve_models_cache_scope(
     endpoints: &config::EndpointsConfig,
     fetch_auth: ModelFetchAuth,
@@ -101,7 +105,7 @@ pub(in crate::agent::remote_config) fn resolve_models_cache_scope(
     };
     ModelsCacheScope {
         auth_method: fetch_auth.cache_auth_method(),
-        origin,
+        origin: format!("{origin}#{MODELS_CACHE_ROWS}"),
         identity,
     }
 }

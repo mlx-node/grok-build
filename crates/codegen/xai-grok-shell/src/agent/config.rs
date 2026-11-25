@@ -3257,6 +3257,8 @@ fn default_models(endpoints: &EndpointsConfig) -> IndexMap<String, ModelEntryCon
                 supports_reasoning_effort: m.supports_reasoning_effort,
                 reasoning_efforts: m.reasoning_efforts,
                 reasoning_effort_server_default: false,
+                extra_body_reasoning_effort: false,
+                discovery_base_url: None,
                 variants: m.variants,
                 supports_backend_search: m.supports_backend_search,
                 compactions_remaining: m.compactions_remaining,
@@ -3323,6 +3325,12 @@ pub struct ModelEntryConfig {
     /// True when the endpoint advertised the menu without naming a default; the request then omits the effort so the server applies its own.
     #[serde(default, skip_serializing_if = "is_false")]
     pub reasoning_effort_server_default: bool,
+    /// mlx-node fork: the row is an mlx-node engine's and lists `reasoningEfforts`, so that engine reads the effort from `extra_body.reasoning_effort`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub extra_body_reasoning_effort: bool,
+    /// The base URL whose `/models` listed this row; `None` for rows from anywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discovery_base_url: Option<String>,
     /// The id to send for each effort, empty unless the backend spells the effort into the model id.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variants: Vec<ModelVariant>,
@@ -3427,6 +3435,8 @@ impl Default for ModelEntryConfig {
             supports_reasoning_effort: false,
             reasoning_efforts: Vec::new(),
             reasoning_effort_server_default: false,
+            extra_body_reasoning_effort: false,
+            discovery_base_url: None,
             variants: Vec::new(),
             extra_headers: IndexMap::new(),
             context_window: NonZeroU64::MIN,
@@ -3742,6 +3752,12 @@ pub struct ModelInfo {
     /// The menu came without a default; leave `reasoning_effort` unset so the request omits it and the server applies its own.
     #[serde(default, skip_serializing_if = "is_false")]
     pub reasoning_effort_server_default: bool,
+    /// See [`ModelEntryConfig::extra_body_reasoning_effort`].
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub extra_body_reasoning_effort: bool,
+    /// See [`ModelEntryConfig::discovery_base_url`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discovery_base_url: Option<String>,
     /// The id to send for each effort, empty unless the backend spells the effort into the model id.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variants: Vec<ModelVariant>,
@@ -3807,6 +3823,8 @@ impl ModelInfo {
             supports_reasoning_effort: false,
             reasoning_efforts: Vec::new(),
             reasoning_effort_server_default: false,
+            extra_body_reasoning_effort: false,
+            discovery_base_url: None,
             variants: Vec::new(),
             supports_backend_search: false,
             compactions_remaining: None,
@@ -3852,6 +3870,8 @@ impl ModelInfo {
             supports_reasoning_effort: entry.supports_reasoning_effort,
             reasoning_efforts: entry.reasoning_efforts.clone(),
             reasoning_effort_server_default: entry.reasoning_effort_server_default,
+            extra_body_reasoning_effort: entry.extra_body_reasoning_effort,
+            discovery_base_url: entry.discovery_base_url.clone(),
             variants: entry.variants.clone(),
             supports_backend_search: entry.supports_backend_search,
             compactions_remaining: entry.compactions_remaining,
@@ -4572,6 +4592,8 @@ pub(crate) fn resolve_aux_model_sampling_config(
                 supports_reasoning_effort: false,
                 reasoning_efforts: Vec::new(),
                 reasoning_effort_server_default: false,
+                extra_body_reasoning_effort: false,
+                discovery_base_url: None,
                 variants: Vec::new(),
                 supports_backend_search: false,
                 compactions_remaining: None,
@@ -4740,6 +4762,7 @@ pub(crate) fn sampling_config_for_model(
         compactions_remaining: info.compactions_remaining,
         compaction_at_tokens: info.compaction_at_tokens,
         doom_loop_recovery: None,
+        extra_body_effort_gate: None,
         header_injector: None,
     }
 }
@@ -4809,6 +4832,8 @@ fn resolve_hidden_default_web_search_sampling_config(
             supports_reasoning_effort: false,
             reasoning_efforts: Vec::new(),
             reasoning_effort_server_default: false,
+            extra_body_reasoning_effort: false,
+            discovery_base_url: None,
             variants: Vec::new(),
             supports_backend_search: false,
             compactions_remaining: None,

@@ -122,6 +122,7 @@ impl MvpAgent {
                     primary.client_identifier.clone(),
                     primary.max_retries,
                 );
+                cfg.extra_body_effort_gate = Some(self.models_manager.extra_body_effort_gate());
                 cfg
             }
             None => {
@@ -2152,6 +2153,7 @@ impl MvpAgent {
             user_id,
         );
         config.origin_client = origin_client;
+        config.extra_body_effort_gate = Some(self.models_manager.extra_body_effort_gate());
         config
     }
     /// Resolve sampling config for a model by ID, falling back to the global default on resolution failure.
@@ -2273,6 +2275,7 @@ impl MvpAgent {
             alpha_test_key.as_deref(),
             &cfg.base_url,
         );
+        cfg.extra_body_effort_gate = Some(self.models_manager.extra_body_effort_gate());
         Some(cfg)
     }
     /// The caller at the process boundary renders the [`crate::agent::init::BootstrapError`] and exits.

@@ -588,6 +588,9 @@ impl BackendClient {
 /// Default context window when the remote endpoint doesn't provide one.
 pub(crate) const DEFAULT_CONTEXT_WINDOW: u64 = 256_000;
 
+/// The `owned_by` of every mlx-node engine `/v1/models` row.
+const MLX_NODE_OWNER: &str = "mlx-node";
+
 pub struct FetchModelsResult {
     pub models: Vec<crate::agent::config::ModelEntryConfig>,
     pub etag: Option<String>,
@@ -657,13 +660,18 @@ pub(crate) fn parse_remote_model_value(
         .unwrap_or_default();
 
     // A non-empty explicit menu wins; the public `/v1/models` advertises one under `capabilities` instead.
-    let (reasoning_efforts, reasoning_effort_server_default) = obj
+    let listed_efforts = obj
         .get("reasoningEfforts")
         .or_else(|| obj.get("reasoning_efforts"))
         .or_else(|| meta.and_then(|m| m.get("reasoningEfforts")))
         .and_then(|v| v.as_array())
         .map(|arr| xai_grok_sampling_types::parse_reasoning_effort_options(arr, "reasoningEfforts"))
-        .filter(|options| !options.is_empty())
+        .filter(|options| !options.is_empty());
+    // mlx-node fork: only an mlx-node engine that lists its levels reads `extra_body.reasoning_effort`; a strict Messages endpoint answers 400 to the unknown field.
+    let extra_body_reasoning_effort = obj.get("owned_by").and_then(|v| v.as_str())
+        == Some(MLX_NODE_OWNER)
+        && listed_efforts.is_some();
+    let (reasoning_efforts, reasoning_effort_server_default) = listed_efforts
         .map(|options| (options, false))
         .or_else(|| {
             obj.get("capabilities")
@@ -749,6 +757,8 @@ pub(crate) fn parse_remote_model_value(
             .unwrap_or(false),
         reasoning_efforts,
         reasoning_effort_server_default,
+        extra_body_reasoning_effort,
+        discovery_base_url: None,
         // Each entry is read on its own so one bad entry costs only its effort, never the whole list.
         variants: obj
             .get("variants")

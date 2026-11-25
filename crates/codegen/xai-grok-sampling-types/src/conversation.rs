@@ -2486,7 +2486,7 @@ mod tests {
                         .is_some()
                 }
                 crate::ApiBackend::Messages => {
-                    let mapped = super::messages::build_messages_request(&request());
+                    let mapped = super::messages::build_messages_request(&request(), false);
                     serde_json::to_value(&mapped)
                         .expect("messages request serializes")
                         .get("prompt_cache_key")
@@ -2715,7 +2715,7 @@ mod tests {
         assert_eq!(f.schema, Some(schema.clone()));
 
         // Messages API: json_schema becomes output_config.format
-        let msgs_req = build_messages_request(&req);
+        let msgs_req = build_messages_request(&req, false);
         let output_config = msgs_req.output_config.expect("output_config should be set");
         let fmt = output_config.format.expect("format should be set");
         let crate::messages::OutputFormat::JsonSchema { schema: s } = fmt;

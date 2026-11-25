@@ -58,6 +58,8 @@ pub struct MockModelEntry {
     reasoning_efforts: Vec<Value>,
     /// Sets `You are <label>` in the primary system prompt, so a model switch is visible on the wire.
     system_prompt_label: Option<String>,
+    /// `owned_by` of the row; `test` when unset.
+    owned_by: Option<String>,
 }
 
 impl MockModelEntry {
@@ -71,6 +73,7 @@ impl MockModelEntry {
             reasoning_effort: None,
             reasoning_efforts: Vec::new(),
             system_prompt_label: None,
+            owned_by: None,
         }
     }
 
@@ -111,12 +114,17 @@ impl MockModelEntry {
         self
     }
 
+    pub fn with_owned_by(mut self, owned_by: impl Into<String>) -> Self {
+        self.owned_by = Some(owned_by.into());
+        self
+    }
+
     fn to_json(&self) -> Value {
         let mut obj = json!({
             "id": self.id,
             "object": "model",
             "created": 1234567890,
-            "owned_by": "test",
+            "owned_by": self.owned_by.as_deref().unwrap_or("test"),
             "context_length": 131_072
         });
         if let Some(map) = obj.as_object_mut() {

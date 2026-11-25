@@ -694,7 +694,7 @@ async fn unacked_wake_start_and_abort_fail_closed_without_parking_runner() {
 
     let local = tokio::task::LocalSet::new();
     local
-        .run_until(async {
+        .run_until(Box::pin(async {
             let meta_dir = tempfile::tempdir().expect("meta dir");
             let server = xai_grok_test_support::MockInferenceServer::start()
                 .await
@@ -809,7 +809,7 @@ async fn unacked_wake_start_and_abort_fail_closed_without_parking_runner() {
             drop(backend);
             coordinator.await.expect("coordinator");
             usage_ack.abort();
-        })
+        }))
         .await;
 }
 
@@ -823,7 +823,7 @@ async fn rejected_deferred_start_restores_prior_without_publication() {
     };
 
     tokio::task::LocalSet::new()
-        .run_until(async {
+        .run_until(Box::pin(async {
             let meta_dir = tempfile::tempdir().expect("meta dir");
             let server = xai_grok_test_support::MockInferenceServer::start()
                 .await
@@ -933,7 +933,7 @@ async fn rejected_deferred_start_restores_prior_without_publication() {
             drop(backend);
             coordinator.await.expect("coordinator");
             usage_ack.abort();
-        })
+        }))
         .await;
 }
 
@@ -948,7 +948,7 @@ async fn started_wake_with_failed_metadata_write_preserves_prior_durable_artifac
 
     let local = tokio::task::LocalSet::new();
     local
-        .run_until(async {
+        .run_until(Box::pin(async {
             let meta_dir = tempfile::tempdir().expect("meta dir");
             let server = xai_grok_test_support::MockInferenceServer::start()
                 .await
@@ -1062,7 +1062,7 @@ async fn started_wake_with_failed_metadata_write_preserves_prior_durable_artifac
             drop(backend);
             coordinator.await.expect("coordinator");
             usage_ack.abort();
-        })
+        }))
         .await;
 }
 

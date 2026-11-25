@@ -120,14 +120,10 @@ pub struct AgentPipes {
 }
 
 /// Stand up `MvpAgent` plus its ACP connection and IO tasks on the current `LocalSet`.
-/// `remote` is installed before `MvpAgent::new` so tests can seed `RemoteSettings`
-/// (including a grove kill) before the first worktree RPC.
-fn spawn_agent_local(remote: Option<xai_grok_shell::util::config::RemoteSettings>) -> AgentPipes {
+fn spawn_agent_local(agent_config: AgentConfig) -> AgentPipes {
     let (c2a_a, c2a_b) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
     let (a2c_a, a2c_b) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
 
-    let mut agent_config = AgentConfig::default();
-    agent_config.remote_settings = remote;
     let auth_manager = Arc::new(agent_config.create_auth_manager());
     let (gw_tx, gw_rx) = tokio::sync::mpsc::unbounded_channel();
     let agent = MvpAgent::new(
@@ -169,6 +165,8 @@ where
 }
 
 /// [`connect_and_auth`] with a seeded remote-settings object (grove gate).
+/// `remote` is installed before `MvpAgent::new` so tests can seed `RemoteSettings`
+/// (including a grove kill) before the first worktree RPC.
 #[allow(dead_code)]
 pub async fn connect_and_auth_with_remote<C>(
     client: C,
@@ -178,7 +176,22 @@ pub async fn connect_and_auth_with_remote<C>(
 where
     C: acp::Client + 'static,
 {
-    let pipes = spawn_agent_local(remote);
+    let mut agent_config = AgentConfig::default();
+    agent_config.remote_settings = remote;
+    connect_and_auth_with_config(client, client_type, agent_config).await
+}
+
+/// [`connect_and_auth`] with the agent built from `agent_config`, e.g. one parsed from a `config.toml`.
+#[allow(dead_code)]
+pub async fn connect_and_auth_with_config<C>(
+    client: C,
+    client_type: &str,
+    agent_config: AgentConfig,
+) -> (acp::ClientSideConnection, acp::InitializeResponse)
+where
+    C: acp::Client + 'static,
+{
+    let pipes = spawn_agent_local(agent_config);
     connect_client(client, client_type, pipes).await
 }
 
@@ -376,6 +389,35 @@ pub fn run_agent_test_with_models<F, Fut>(
     F: FnOnce(std::path::PathBuf, std::rc::Rc<xai_grok_test_support::MockInferenceServer>) -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
+    run_agent_test_on_servers([models], |cwd, [server]| body(cwd, server));
+}
+
+/// [`run_agent_test_with_models`] plus a second mock server with its own catalog. The environment points every endpoint at the first.
+#[allow(dead_code)]
+pub fn run_agent_test_with_two_servers<F, Fut>(
+    catalogs: [Vec<xai_grok_test_support::MockModelEntry>; 2],
+    body: F,
+) where
+    F: FnOnce(
+        std::path::PathBuf,
+        std::rc::Rc<xai_grok_test_support::MockInferenceServer>,
+        std::rc::Rc<xai_grok_test_support::MockInferenceServer>,
+    ) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    run_agent_test_on_servers(catalogs, |cwd, [first, second]| body(cwd, first, second));
+}
+
+fn run_agent_test_on_servers<const N: usize, F, Fut>(
+    catalogs: [Vec<xai_grok_test_support::MockModelEntry>; N],
+    body: F,
+) where
+    F: FnOnce(
+        std::path::PathBuf,
+        [std::rc::Rc<xai_grok_test_support::MockInferenceServer>; N],
+    ) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     let _env_guard = hold_global_env();
     xai_grok_shell::agent::remote_config::settings_get::reset_startup_settings_for_tests();
     xai_grok_extra_ca::ensure_default_crypto_provider();
@@ -386,14 +428,16 @@ pub fn run_agent_test_with_models<F, Fut>(
         .enable_all()
         .build()
         .expect("mock runtime");
-    let server = std::rc::Rc::new(
-        mock_rt
-            .block_on(xai_grok_test_support::MockInferenceServer::start_with_models(models))
-            .expect("mock server"),
-    );
+    let servers = catalogs.map(|models| {
+        std::rc::Rc::new(
+            mock_rt
+                .block_on(xai_grok_test_support::MockInferenceServer::start_with_models(models))
+                .expect("mock server"),
+        )
+    });
     let grok_home = tempfile::TempDir::new().expect("grok home");
     let workdir = tempfile::TempDir::new().expect("workdir");
-    set_test_env(grok_home.path(), &server.url());
+    set_test_env(grok_home.path(), &servers[0].url());
     // After GROK_HOME is the temp dir, so teardown cannot OnceLock ~/.grok.
     let _globals = RestoreProcessGlobals::enter();
 
@@ -402,10 +446,7 @@ pub fn run_agent_test_with_models<F, Fut>(
         .build()
         .expect("agent runtime");
     let local = tokio::task::LocalSet::new();
-    agent_rt.block_on(local.run_until(body(
-        workdir.path().to_path_buf(),
-        std::rc::Rc::clone(&server),
-    )));
+    agent_rt.block_on(local.run_until(body(workdir.path().to_path_buf(), servers.clone())));
 }
 
 fn hold_global_env() -> MutexGuard<'static, ()> {

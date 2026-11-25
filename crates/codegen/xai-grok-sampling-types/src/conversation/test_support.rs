@@ -42,6 +42,7 @@ pub(super) fn agent_request(turns: usize) -> serde_json::Value {
     }
     serde_json::to_value(build_messages_request(
         &ConversationRequest::from_items(items).with_model("messages-compatible-model"),
+        false,
     ))
     .unwrap()
 }

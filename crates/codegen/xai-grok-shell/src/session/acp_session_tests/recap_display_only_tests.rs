@@ -80,8 +80,10 @@ fn assert_messages_rides_parent_prefix(
         reasoning_effort: Some(xai_grok_sampling_types::ReasoningEffort::High),
         ..Default::default()
     };
-    let expected = serde_json::to_value(xai_grok_sampling_types::build_messages_request(&request))
-        .expect("main Messages request serializes");
+    let expected = serde_json::to_value(xai_grok_sampling_types::build_messages_request(
+        &request, false,
+    ))
+    .expect("main Messages request serializes");
     let expected_messages = without_cache_control(j(&expected, "messages").clone());
     let actual_messages = without_cache_control(j(body, "messages").clone());
     let expected = expected_messages
@@ -1324,6 +1326,186 @@ async fn messages_side_calls_preserve_completed_reasoning() {
             assert_messages_rides_parent_prefix(&body, parent, "title refresh");
         })
         .await;
+}
+
+/// A Messages catalog row served at `base_url`, which listed it; `mlx` makes it an mlx-node engine row with levels.
+fn messages_row(model: &str, base_url: &str, mlx: bool) -> crate::agent::config::ModelEntry {
+    let mut entry = crate::agent::config::ModelEntry::fallback(
+        model,
+        &crate::agent::config::EndpointsConfig::default(),
+    );
+    entry.info.api_backend = xai_grok_sampling_types::ApiBackend::Messages;
+    entry.info.base_url = base_url.to_owned();
+    entry.info.supports_reasoning_effort = true;
+    entry.info.extra_body_reasoning_effort = mlx;
+    entry.info.discovery_base_url = Some(base_url.to_owned());
+    entry
+}
+
+/// The Messages request of the side call `label` (`btw`, `title-refresh`, ...), found by its `x-grok-req-id`: on
+/// Messages the parent-cached calls carry the parent session id as their conv id.
+fn messages_body_for(
+    server: &xai_grok_test_support::MockInferenceServer,
+    label: &str,
+) -> serde_json::Value {
+    let prefix = format!("xai-{label}-");
+    server
+        .requests()
+        .into_iter()
+        .find(|request| {
+            request.path == "/v1/messages"
+                && request
+                    .header("x-grok-req-id")
+                    .is_some_and(|id| id.starts_with(&prefix))
+        })
+        .and_then(|request| request.body)
+        .unwrap_or_else(|| panic!("no Messages request for {label}"))
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn messages_side_calls_send_extra_body_only_to_an_endpoint_that_reads_it() {
+    use xai_grok_sampling_types::ReasoningEffort;
+    use xai_grok_test_support::MockInferenceServer;
+
+    for mlx in [false, true] {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let (gateway_tx, _grx) =
+                    tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+                let (persistence_tx, _prx) =
+                    tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+                let mut actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
+                actor.title_refresh_enabled = true;
+                *actor.agent.borrow_mut() = test_agent_with_goal_tool().await;
+                let actor = std::sync::Arc::new(actor);
+
+                let server = MockInferenceServer::start().await.unwrap();
+                server.set_response("a short summary");
+                let mut cfg = actor.chat_state_handle.get_sampling_config().await.unwrap();
+                actor.models_manager.insert_test_entry(
+                    cfg.model.clone(),
+                    messages_row(&cfg.model, &server.url(), mlx),
+                );
+                cfg.base_url = server.url();
+                cfg.api_backend = xai_grok_sampling_types::ApiBackend::Messages;
+                cfg.reasoning_effort = Some(ReasoningEffort::Low);
+                actor.chat_state_handle.update_sampling_config(cfg);
+                // Three user turns reach the first title-refresh checkpoint.
+                actor.chat_state_handle.replace_conversation(vec![
+                    ConversationItem::system("you are a coding agent"),
+                    ConversationItem::user("explain the borrow checker"),
+                    ConversationItem::assistant("it enforces shared-xor-mutable"),
+                    ConversationItem::user("and lifetimes?"),
+                    ConversationItem::assistant("they bound how long a borrow lives"),
+                    ConversationItem::user("and Rc?"),
+                    ConversationItem::assistant("shared ownership with a count"),
+                ]);
+
+                actor
+                    .handle_side_question("what does xor mean here?", Vec::new())
+                    .await
+                    .expect("side question must succeed");
+                actor.maybe_refresh_title();
+                for _ in 0..200 {
+                    if actor.title_refresh_task.borrow().is_none() {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                assert!(
+                    actor.title_refresh_task.borrow().is_none(),
+                    "title refresh must finish"
+                );
+                assert_eq!(
+                    server.request_count_for("/v1/messages"),
+                    2,
+                    "/btw and the title refresh each send one request"
+                );
+
+                let expected = mlx.then(|| serde_json::json!({ "reasoning_effort": "low" }));
+                for label in ["btw", "title-refresh"] {
+                    let body = messages_body_for(&server, label);
+                    assert_eq!(
+                        body.get("extra_body"),
+                        expected.as_ref(),
+                        "{label} mlx={mlx}: {body:#}"
+                    );
+                    assert_eq!(
+                        j(j(&body, "output_config"), "effort"),
+                        "low",
+                        "{label}: {body:#}"
+                    );
+                }
+            })
+            .await;
+    }
+}
+
+/// One Messages URL serves the session's row and the recap model's row; recap and prompt suggestions swap in the second.
+/// `extra_body` follows the row the request names, never the session's.
+#[tokio::test(flavor = "current_thread")]
+async fn messages_side_calls_on_another_row_of_the_session_url_follow_that_row() {
+    use xai_grok_sampling_types::ReasoningEffort;
+    use xai_grok_test_support::MockInferenceServer;
+
+    let other = crate::util::config::SessionRecapConfig::default()
+        .settings()
+        .model;
+    for session_row_is_mlx in [true, false] {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let (gateway_tx, _grx) =
+                    tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+                let (persistence_tx, _prx) =
+                    tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+                let actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
+                *actor.agent.borrow_mut() = test_agent_with_goal_tool().await;
+
+                let server = MockInferenceServer::start().await.unwrap();
+                server.set_response("a short summary");
+                let mut cfg = actor.chat_state_handle.get_sampling_config().await.unwrap();
+                actor.models_manager.insert_test_entry(
+                    cfg.model.clone(),
+                    messages_row(&cfg.model, &server.url(), session_row_is_mlx),
+                );
+                actor.models_manager.insert_test_entry(
+                    other.clone(),
+                    messages_row(&other, &server.url(), !session_row_is_mlx),
+                );
+                cfg.base_url = server.url();
+                cfg.api_backend = xai_grok_sampling_types::ApiBackend::Messages;
+                cfg.reasoning_effort = Some(ReasoningEffort::High);
+                actor.chat_state_handle.update_sampling_config(cfg);
+                actor.chat_state_handle.replace_conversation(vec![
+                    ConversationItem::system("you are a coding agent"),
+                    ConversationItem::user("explain the borrow checker"),
+                    ConversationItem::assistant("it enforces shared-xor-mutable"),
+                ]);
+
+                actor.handle_recap(false).await;
+                actor.handle_suggest_prompt(Some(&other)).await;
+
+                let expected =
+                    (!session_row_is_mlx).then(|| serde_json::json!({ "reasoning_effort": "low" }));
+                for label in ["recap", "promptsuggest"] {
+                    let body = messages_body_for(&server, label);
+                    assert_eq!(j(&body, "model").as_str(), Some(other.as_str()));
+                    assert_eq!(
+                        j(j(&body, "output_config"), "effort"),
+                        "low",
+                        "{label}: {body:#}"
+                    );
+                    assert_eq!(
+                        body.get("extra_body"),
+                        expected.as_ref(),
+                        "{label} session_row_is_mlx={session_row_is_mlx}: {body:#}"
+                    );
+                }
+            })
+            .await;
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -848,6 +848,7 @@ async fn read_parent_sampling_config(
                     .models_manager
                     .model_compaction_at_tokens(catalog_model_id.0.as_ref()),
                 doom_loop_recovery: ctx.sampling_config.doom_loop_recovery,
+                extra_body_effort_gate: Some(ctx.models_manager.extra_body_effort_gate()),
                 header_injector: ctx.sampling_config.header_injector.clone(),
             };
             let model_id = ctx.model_id.clone();
@@ -903,6 +904,7 @@ async fn read_parent_sampling_config(
     fallback.compaction_at_tokens = ctx
         .models_manager
         .model_compaction_at_tokens(catalog_model_id.0.as_ref());
+    fallback.extra_body_effort_gate = Some(ctx.models_manager.extra_body_effort_gate());
     (fallback, ctx.model_id.clone())
 }
 /// `AuthType` for a subagent: BYOK gets `ApiKey` (don't overwrite the BYOK key).
@@ -952,6 +954,7 @@ fn resolve_model_override_to_config(
         ctx.sampling_config.deployment_id.clone(),
         ctx.sampling_config.user_id.clone(),
     );
+    config.extra_body_effort_gate = Some(ctx.models_manager.extra_body_effort_gate());
     config.bearer_resolver = if !ctx.would_strip_fallback_key(config.api_key.as_deref())
         && resolved_auth_type == xai_chat_state::AuthType::SessionToken
     {
