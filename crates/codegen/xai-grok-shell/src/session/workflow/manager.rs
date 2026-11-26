@@ -1746,7 +1746,7 @@ mod tests {
             "let meta = #{ name: \"t\", description: \"d\" };\n\
              let r = agent(\"scan\", #{ output_schema: #{ \"type\": \"object\", \
              \"required\": [\"ok\"], \"properties\": #{ \"ok\": #{ \"type\": \"boolean\" } } } });\n\
-             complete(r.output.ok);"
+             complete(#{ ok: r.output.ok, id: r.agent_id });"
                 .into(),
         )
         .unwrap();
@@ -1797,7 +1797,7 @@ mod tests {
             success: true,
             output: std::sync::Arc::from("```json\n{\"ok\": true}\n```"),
             subagent_id: retry_id.clone(),
-            child_session_id: retry_id,
+            child_session_id: retry_id.clone(),
             tokens_used: 50,
             output_tokens_used: 50,
             total_tokens_used: 50,
@@ -1807,13 +1807,68 @@ mod tests {
         let outcome = outcome_rx.await.unwrap();
         match outcome {
             WorkflowOutcome::Completed { result } => {
-                assert_eq!(result, serde_json::json!(true));
+                assert_eq!(result, serde_json::json!({ "ok": true, "id": retry_id }));
             }
             other => panic!("expected Completed, got {other:?}"),
         }
         let state = manager.tracker.lock().list().into_iter().next().unwrap();
         assert_eq!(state.agents_used, 1, "schema retry is one logical agent");
         assert_eq!(state.agent_budget, Some(5));
+    }
+
+    /// Mutation that turns it red: hand the script attempt 1's id (the next agent resumes the rejected answer).
+    #[tokio::test]
+    async fn resume_after_contract_retry_continues_the_retry() {
+        use xai_grok_tools::implementations::grok_build::task::types::{
+            SubagentEvent, SubagentResult, SubagentSpawnRequest,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let (mut manager, mut subagent_rx) = test_manager(Some(dir.path().to_path_buf()));
+        let resolved = resolve_inline(
+            "let meta = #{ name: \"t\", description: \"d\" };\n\
+             let r = agent(\"scan\", #{ output_schema: #{ \"type\": \"object\", \
+             \"required\": [\"ok\"], \"properties\": #{ \"ok\": #{ \"type\": \"boolean\" } } } });\n\
+             let next = agent(\"repeat\", #{ resume_from: r.agent_id });\n\
+             complete(next.output);"
+                .into(),
+        )
+        .unwrap();
+        let (_run_id, outcome_rx) = manager.launch(resolved, spec()).unwrap();
+        let answer = |req: SubagentSpawnRequest, output: &str| {
+            let id = req.id.clone();
+            let _ = req.result_tx.send(SubagentResult {
+                success: true,
+                output: std::sync::Arc::from(output),
+                subagent_id: id.clone(),
+                child_session_id: id.clone(),
+                ..Default::default()
+            });
+            id
+        };
+
+        let SubagentEvent::Spawn(first) = subagent_rx.recv().await.expect("first spawn") else {
+            panic!("expected spawn event");
+        };
+        let first_id = answer(first, "All files scanned, nothing found.");
+        let SubagentEvent::Spawn(retry) = subagent_rx.recv().await.expect("corrective retry")
+        else {
+            panic!("expected retry spawn event");
+        };
+        assert_eq!(retry.resume_from.as_deref(), Some(first_id.as_str()));
+        let retry_id = answer(retry, "```json\n{\"ok\": true}\n```");
+        let SubagentEvent::Spawn(next) = subagent_rx.recv().await.expect("script resume") else {
+            panic!("expected resume spawn event");
+        };
+        assert_eq!(next.resume_from.as_deref(), Some(retry_id.as_str()));
+        answer(next, "repeated");
+
+        match outcome_rx.await.unwrap() {
+            WorkflowOutcome::Completed { result } => {
+                assert_eq!(result, serde_json::json!("repeated"));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
     }
 
     #[tokio::test]

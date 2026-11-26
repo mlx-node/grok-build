@@ -689,7 +689,7 @@ impl HostService {
         self.tick();
 
         Ok(AgentResult {
-            agent_id: id,
+            agent_id: row.agent_id.clone(),
             success: result.success,
             output,
             cancelled: result.cancelled,
