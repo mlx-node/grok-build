@@ -1163,6 +1163,27 @@ fn stamp_live_fork_session_metadata(
         tracing::warn!(error = %e, "live fork: failed to write forked session summary");
     }
 }
+fn resume_copy_options(
+    source_child_session_id: &str,
+    effective_model_id: &str,
+    parent_prompt_id: Option<String>,
+) -> crate::session::storage::CopySessionOptions {
+    crate::session::storage::CopySessionOptions {
+        parent_session_id: Some(source_child_session_id.to_string()),
+        new_model_id: Some(effective_model_id.to_string()),
+        session_kind: Some("subagent_resume".to_string()),
+        fork_context_source: Some("resumed".to_string()),
+        fork_parent_prompt_id: parent_prompt_id,
+        copy_plan_state: false,
+        copy_plan_mode_state: false,
+        copy_signals: false,
+        copy_usage: true,
+        copy_tool_state: true,
+        copy_events: true,
+        fork_filter: false,
+        ..Default::default()
+    }
+}
 enum BootstrapInitialContext {
     Ready(InitialContext),
     /// Explicit resume_from failed: abort spawn (fail closed).
@@ -1196,20 +1217,11 @@ async fn bootstrap_initial_context(
         let storage = crate::session::storage::jsonl::JsonlStorageAdapter::with_root(
             crate::util::grok_home::grok_home(),
         );
-        let copy_options = crate::session::storage::CopySessionOptions {
-            parent_session_id: Some(source.child_session_id.clone()),
-            new_model_id: Some(effective_model_id.to_string()),
-            session_kind: Some("subagent_resume".to_string()),
-            fork_context_source: Some("resumed".to_string()),
-            fork_parent_prompt_id: request.parent_prompt_id.clone(),
-            copy_plan_state: false,
-            copy_plan_mode_state: false,
-            copy_signals: false,
-            copy_usage: true,
-            copy_tool_state: true,
-            fork_filter: false,
-            ..Default::default()
-        };
+        let copy_options = resume_copy_options(
+            &source.child_session_id,
+            effective_model_id,
+            request.parent_prompt_id.clone(),
+        );
         use crate::session::storage::StorageAdapter as _;
         let is_same_session = source.child_session_id == child_session_info.id.0.as_ref()
             && source.child_cwd == child_session_info.cwd;
