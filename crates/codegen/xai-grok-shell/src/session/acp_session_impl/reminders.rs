@@ -571,6 +571,11 @@ impl SessionActor {
         self.chat_state_handle
             .push_user_message(wrap_in_reminder_tag(content, tag));
     }
+    /// For a reminder whose latch outlives a rewind: after the prompt, a rewind of that turn drops it while the latch stays set.
+    pub(super) fn push_system_reminder_before_current_prompt(&self, content: &str, tag: &str) {
+        self.chat_state_handle
+            .push_user_message_before_current_prompt(wrap_in_reminder_tag(content, tag));
+    }
     /// Mark completion IDs as reported in the shared `ReportedTaskCompletions` state.
     /// The per-tool-call `TaskCompletionReminder` then won't (re-)surface them.
     /// Used to dedupe completions the model actually saw (notification-drain / started auto-wake prompts).

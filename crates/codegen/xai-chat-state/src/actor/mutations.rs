@@ -332,6 +332,24 @@ impl ChatStateActor {
         self.prune_retained_conversation();
     }
 
+    /// The current prompt is the `User` item stamped with the index this turn consumed.
+    /// Inserting rewrites the stored history, so the next load keeps the in-memory order.
+    pub(super) fn push_user_message_before_current_prompt(&mut self, item: ConversationItem) {
+        let current_prompt_is_last = matches!(
+            self.state.conversation.last(),
+            Some(ConversationItem::User(user))
+                if user.prompt_index.is_some_and(|index| index + 1 == self.state.prompt_index)
+        );
+        if !current_prompt_is_last {
+            self.push_user_message(item);
+            return;
+        }
+        let at = self.state.conversation.len().saturating_sub(1);
+        self.state.estimated_tokens_since_model += super::state::estimate_item_tokens(&item);
+        self.state.conversation.insert(at, item);
+        self.persistence.replace_history(&self.state.conversation);
+    }
+
     /// Eagerly hard-clear tool results from very old turns in the retained conversation.
     /// Unlike API-copy pruning, this mutates `self.state.conversation` after every user turn.
     /// `updates.jsonl` is never touched, so replay stays intact; synthetic User items raise the age threshold.

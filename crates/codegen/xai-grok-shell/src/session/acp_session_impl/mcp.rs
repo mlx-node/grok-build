@@ -798,7 +798,7 @@ impl SessionActor {
             text.push_str(hint);
         }
         if let Some(text) = reminder_text {
-            self.push_system_reminder_with_tag(&text, self.reminder_wrapper_tag());
+            self.push_system_reminder_before_current_prompt(&text, self.reminder_wrapper_tag());
             tracing::info!(
                 servers = server_summaries.len(),
                 has_failed,
@@ -1050,7 +1050,7 @@ impl SessionActor {
         self.mcp_connecting_reminder_injected.set(true);
         let delivery_tools = self.delivery_tools.borrow().clone();
         let text = format_mcp_connecting_reminder(&connecting, &delivery_tools);
-        self.push_system_reminder(&text);
+        self.push_system_reminder_before_current_prompt(&text, "system-reminder");
         tracing::info!(
             servers = ?connecting,
             ?delivery_tools,

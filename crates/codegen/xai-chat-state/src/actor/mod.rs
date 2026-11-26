@@ -120,6 +120,9 @@ impl ChatStateActor {
             ChatStateCommand::PushUserMessage { item } => {
                 self.push_user_message(item);
             }
+            ChatStateCommand::PushUserMessageBeforeCurrentPrompt { item } => {
+                self.push_user_message_before_current_prompt(item);
+            }
             ChatStateCommand::PushUserMessagesBatch { items } => {
                 for item in items {
                     self.push_user_message(item);
