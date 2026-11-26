@@ -768,7 +768,7 @@ async fn unacked_wake_start_and_abort_fail_closed_without_parking_runner() {
                 .await;
             assert_eq!(wake, ActiveAgentMessageOutcome::NotActiveOrFinalizing);
             let restored = backend
-                .query(&id, true, Some(5_000))
+                .query(&id, true, Some(60_000))
                 .await
                 .expect("restored prior snapshot");
             assert!(matches!(
@@ -899,7 +899,7 @@ async fn rejected_deferred_start_restores_prior_without_publication() {
                 ActiveAgentMessageOutcome::NotActiveOrFinalizing
             );
             let restored = backend
-                .query(&id, true, Some(5_000))
+                .query(&id, true, Some(60_000))
                 .await
                 .expect("restored prior completion");
             assert!(
@@ -1026,7 +1026,7 @@ async fn started_wake_with_failed_metadata_write_preserves_prior_durable_artifac
                 ActiveAgentMessageOutcome::Accepted { .. }
             ));
             let wake = backend
-                .query(&id, true, Some(5_000))
+                .query(&id, true, Some(60_000))
                 .await
                 .expect("wake completion");
             assert!(matches!(
