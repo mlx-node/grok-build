@@ -2106,6 +2106,8 @@ async fn get_transcript_path_returns_some_when_file_exists() {
             let mut actor =
                 create_test_actor(50_000, 200_000, 85, gateway_tx, persistence_tx).await;
             actor.compaction.compaction_mode = xai_chat_state::CompactionMode::Transcript;
+            // Own session dir: the cleanup below must not delete files of tests sharing the fixture's id.
+            actor.session_info.id = acp::SessionId::new(uuid::Uuid::now_v7().to_string());
             let session_dir = crate::session::persistence::session_dir(&actor.session_info);
             std::fs::create_dir_all(&session_dir).unwrap();
             let updates_path = session_dir.join("updates.jsonl");
