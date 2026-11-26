@@ -379,7 +379,8 @@ impl SessionActor {
     }
     /// Tracing log for buffered xAI notifications emerging from emit_buffered.
     /// Mirrors `log_outbound_notification` for ACP.
-    /// Visible with `RUST_LOG=acp_event=info`.
+    /// Both log at DEBUG: `GROK_LOG_FILE` (DEBUG default) or `RUST_LOG=acp_event=debug` shows them; the `--debug` /
+    /// `--debug-file` firehose drops them, since `acp_event` is not in its allowlist.
     fn log_outbound_xai_buffered(&self, notification: &XaiSessionNotification) {
         if !matches!(
             notification.update,
@@ -387,7 +388,7 @@ impl SessionActor {
         ) {
             return;
         }
-        tracing::info!(
+        tracing::debug!(
             target: "acp_event",
             event = "xai_buffered_notification_sent",
             session_id = %self.session_info.id,
@@ -411,7 +412,7 @@ impl SessionActor {
         let chunk_index = meta
             .and_then(|m| m.get("chunkIndex"))
             .and_then(|v| v.as_u64());
-        tracing::info!(
+        tracing::debug!(
             target: "acp_event",
             event = "agent_message_sent",
             event_id = %event_id,
@@ -1179,6 +1180,68 @@ mod xai_event_id_stamping_tests {
                     }
                     _ => panic!("expected Acp update"),
                 }
+            })
+            .await;
+    }
+    struct AcpEventCount(Arc<std::sync::atomic::AtomicUsize>);
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for AcpEventCount {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if event.metadata().target() == "acp_event" {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+    /// A streamed run flushes one thought/message chunk per model delta, so an INFO `acp_event` line here floods the
+    /// `--debug-file` firehose (its filter is `info` for this target).
+    #[tokio::test]
+    async fn streamed_chunk_acp_event_lines_log_at_debug_not_info() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tracing_subscriber::Layer as _;
+        use tracing_subscriber::filter::LevelFilter;
+        use tracing_subscriber::layer::SubscriberExt as _;
+        use tracing_subscriber::util::SubscriberInitExt as _;
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let (gateway_tx, _gateway_rx) =
+                    tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+                let (persistence_tx, _prx) =
+                    tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+                let actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
+                let at_info = Arc::new(AtomicUsize::new(0));
+                let at_debug = Arc::new(AtomicUsize::new(0));
+                let _guard = tracing_subscriber::registry()
+                    .with(AcpEventCount(at_info.clone()).with_filter(LevelFilter::INFO))
+                    .with(AcpEventCount(at_debug.clone()).with_filter(LevelFilter::DEBUG))
+                    .set_default();
+                actor
+                    .emit_buffered(SessionNotification::Acp(Box::new(
+                        acp::SessionNotification::new(
+                            acp::SessionId::new("test-actor"),
+                            acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(
+                                acp::ContentBlock::Text(acp::TextContent::new("thinking")),
+                            )),
+                        ),
+                    )))
+                    .await;
+                actor
+                    .emit_buffered(SessionNotification::Xai(Box::new(XaiSessionNotification {
+                        session_id: acp::SessionId::new("test-actor"),
+                        update: XaiSessionUpdate::ToolCallDeltaChunk {
+                            tool_call_id: Some("call_1".into()),
+                            tool_index: 0,
+                            name: Some("bash".into()),
+                            arguments_delta: Some("{\"cmd\"".into()),
+                        },
+                        meta: None,
+                    })))
+                    .await;
+                assert_eq!(at_info.load(Ordering::Relaxed), 0);
+                assert_eq!(at_debug.load(Ordering::Relaxed), 2);
             })
             .await;
     }

@@ -83,12 +83,15 @@ fn default_file_filter() -> EnvFilter {
 }
 
 // Open `path` as a non-blocking flat `fmt` layer with `filter`; ansi off, target on.
+// JsonFields: the default text fields append every `span.record` to the stored span string, so a turn span re-recorded
+// once per model call grew by its whole field set each call, on every line under it. JSON merges by key, last value wins.
 fn build_file_layer<S>(path: &Path, filter: EnvFilter) -> std::io::Result<impl Layer<S>>
 where
     S: Subscriber + for<'span> LookupSpan<'span>,
 {
     let non_blocking = crate::appender::non_blocking_file_writer(path)?;
     let fmt_layer = tracing_subscriber::fmt::layer()
+        .fmt_fields(tracing_subscriber::fmt::format::JsonFields::new())
         .with_target(true)
         .with_ansi(false)
         .with_writer(non_blocking)
@@ -528,6 +531,42 @@ mod tests {
         let layer =
             build_file_layer::<tracing_subscriber::Registry>(dir.path(), default_file_filter());
         assert!(layer.is_err());
+    }
+
+    #[test]
+    fn file_layer_prints_a_re_recorded_span_field_once_with_its_last_value() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let _lock = flush_test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("debug.log");
+        let layer =
+            build_file_layer::<tracing_subscriber::Registry>(&path, firehose_filter()).unwrap();
+        let subscriber = tracing_subscriber::registry().with(layer);
+
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!(
+                target: "xai_grok_shell",
+                "turn",
+                n = tracing::field::Empty
+            );
+            for n in 1..=3_u64 {
+                span.record("n", n);
+            }
+            span.in_scope(|| tracing::info!(target: "xai_grok_shell", "model call done"));
+        });
+        crate::appender::flush_file_log_guards();
+
+        let log = std::fs::read_to_string(&path).unwrap();
+        let line = log
+            .lines()
+            .find(|l| l.contains("model call done"))
+            .unwrap_or_else(|| panic!("event line missing: {log:?}"));
+        assert_eq!(line.matches(r#""n":3"#).count(), 1, "{line}");
+        assert!(
+            !line.contains("n=1") && !line.contains(r#""n":1"#),
+            "{line}"
+        );
     }
 
     #[test]
