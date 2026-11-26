@@ -235,13 +235,6 @@ impl ProfileName {
                 if real == home.join(path.file_name()?) {
                     return Some(real);
                 }
-                let default_sessions =
-                    xai_dirs::home_dir().map(|user_home| user_home.join(".grok").join("sessions"));
-                if path.file_name() == Some(std::ffi::OsStr::new("sessions"))
-                    && default_sessions.as_ref() == Some(&real)
-                {
-                    return Some(real);
-                }
                 None
             }
             Ok(_) => Some(path.to_path_buf()),
@@ -281,7 +274,7 @@ impl ProfileName {
 
         // Read-write paths. nono/Landlock need the path to exist at apply time (it opens an O_PATH fd), but new files within a
         // granted directory can be created freely after the sandbox is applied. Symlink children of grok_home fail closed unless
-        // the canonical dir is this home's same-named child or default ~/.grok/sessions.
+        // the canonical dir is this home's same-named child.
         let home = grok_home();
         for path in &profile.read_write {
             let Some(grant) = Self::read_write_grant_path(path, &home) else {
@@ -595,6 +588,64 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ws);
         assert!(config.profiles.contains_key("mlxmark"));
         assert!(!config.profiles.contains_key("grokmark"));
+    }
+
+    #[cfg(all(feature = "enforce", unix))]
+    const SESSIONS_LINK_ROOT_ENV: &str = "SANDBOX_TEST_SESSIONS_LINK_ROOT";
+
+    /// Run by `a_sessions_link_into_grok_builds_home_gets_no_grant` in a child process whose `HOME` is the fixture root.
+    #[test]
+    #[ignore = "child half of a_sessions_link_into_grok_builds_home_gets_no_grant"]
+    #[cfg(all(feature = "enforce", unix))]
+    fn sessions_link_grant_in_fixture_home() {
+        let Some(root) = std::env::var_os(SESSIONS_LINK_ROOT_ENV) else {
+            return;
+        };
+        let agent_home = PathBuf::from(root).join(".mlx-agent");
+        assert_eq!(
+            ProfileName::read_write_grant_path(&agent_home.join("sessions"), &agent_home),
+            None
+        );
+    }
+
+    #[test]
+    #[cfg(all(feature = "enforce", unix))]
+    fn a_sessions_link_into_grok_builds_home_gets_no_grant() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("grok-sessions-link-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(root.join(".grok").join("sessions")).unwrap();
+        let root = dunce::canonicalize(&root).unwrap();
+        let agent_home = root.join(".mlx-agent");
+        std::fs::create_dir_all(agent_home.join("own")).unwrap();
+        std::os::unix::fs::symlink(
+            root.join(".grok").join("sessions"),
+            agent_home.join("sessions"),
+        )
+        .unwrap();
+        let own = ProfileName::read_write_grant_path(&agent_home.join("own"), &agent_home);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "profiles::tests::sessions_link_grant_in_fixture_home",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("HOME", &root)
+            .env(SESSIONS_LINK_ROOT_ENV, &root)
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(own, Some(agent_home.join("own")));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
