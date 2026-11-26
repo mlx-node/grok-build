@@ -758,6 +758,31 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn loopback_connection_dropped_after_accept_is_not_a_connect_error() {
+        const GUARD: Duration = Duration::from_secs(5);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind an ephemeral port");
+        let url = format!(
+            "http://{}/v1/messages",
+            listener.local_addr().expect("listener address")
+        );
+        let server = async {
+            let (stream, _) = listener.accept().await.expect("accept the request");
+            drop(stream);
+        };
+        let ((), sent) =
+            tokio::time::timeout(GUARD, async { tokio::join!(server, reqwest::get(url)) })
+                .await
+                .expect("a dropped loopback connection fails well within the guard");
+        let send_err = sent.expect_err("the server closed without a response");
+
+        assert!(!send_err.is_connect(), "{send_err:?}");
+        assert!(!is_loopback_connect_error(&SamplingError::Http(send_err)));
+    }
+
     #[test]
     fn loopback_url_is_v4_loopback_v6_loopback_or_localhost() {
         for loopback in [

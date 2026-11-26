@@ -1536,6 +1536,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configured_max_retries_below_the_loopback_cap_is_kept() {
+        const CONNECT_GUARD: Duration = Duration::from_secs(5);
+
+        let port = {
+            let listener =
+                std::net::TcpListener::bind("127.0.0.1:0").expect("bind an ephemeral port");
+            listener.local_addr().expect("listener address").port()
+        };
+        let send_err = tokio::time::timeout(
+            CONNECT_GUARD,
+            reqwest::get(format!("http://127.0.0.1:{port}/v1/messages")),
+        )
+        .await
+        .expect("a refused loopback connect fails well within the guard")
+        .expect_err("nothing listens on the dropped port");
+        let error = SamplingError::Http(send_err);
+        assert!(retry_mod::is_loopback_connect_error(&error), "{error:?}");
+
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let mut completion = CompletionState::new(None);
+        let mut retry_count = 0;
+        let mut request = ConversationRequest::default();
+        let config = SamplerConfig {
+            base_url: "http://localhost".into(),
+            model: "test-model".into(),
+            ..Default::default()
+        };
+        let mut client = SamplingClient::new(config.clone()).expect("test client");
+
+        let should_continue = apply_retry_decision(
+            &error,
+            &mut retry_count,
+            1,
+            &RetryPolicy::default(),
+            &event_tx,
+            &RequestId::from("loopback-cap-1"),
+            &mut request,
+            &mut client,
+            &config,
+            &CancellationToken::new(),
+            &mut completion,
+            &tracing::Span::none(),
+        )
+        .await;
+
+        assert!(!should_continue, "max_retries 1 allows no retry");
+        assert_eq!(retry_count, 0);
+        assert!(matches!(
+            event_rx.try_recv(),
+            Ok(SamplingEvent::Failed { .. })
+        ));
+    }
+
+    #[tokio::test]
     async fn tee_captures_first_error_only() {
         let items: Vec<SamplingResult<u32>> = vec![
             Ok(1),
