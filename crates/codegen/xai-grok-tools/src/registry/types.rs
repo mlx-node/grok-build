@@ -1066,11 +1066,8 @@ impl ToolRegistryBuilder {
             }
         }
         let session_folder = crate::types::resources::SessionFolder(ctx.session_folder.clone());
-        let feedback_drafts_path =
-            crate::implementations::grok_build::send_feedback::drafts_file_path(&session_folder.0);
         let renderer = TemplateRenderer::new(kind_to_name.clone(), kind_params.clone())
             .with_system_reminders_enabled(self.system_reminders_enabled)
-            .with_feedback_drafts_path(feedback_drafts_path)
             .with_whole_read(truncation_config.whole_read);
         let mut tools = Vec::new();
         let mut resources = Resources::new();
@@ -2768,6 +2765,54 @@ mod tests {
                 );
             }
         }
+    }
+    /// Every session advertises the same tools first in its prompt, so per-session text in any tool
+    /// splits the prompt cache between sessions. Every GrokBuild tool, a superset of the main
+    /// session's built-ins, rendered for two sessions.
+    #[tokio::test]
+    async fn tool_descriptions_do_not_depend_on_the_session_folder() {
+        let grok_build_prefix = format!("{}:", ToolNamespace::GrokBuild);
+        let mut ids: Vec<String> = ToolRegistryBuilder::new()
+            .known_tool_ids()
+            .into_iter()
+            .filter(|id| id.starts_with(&grok_build_prefix))
+            .collect();
+        ids.sort();
+        assert!(
+            ids.contains(&ToolConfig::for_tool::<grok_build::SendFeedbackTool>().id),
+            "{ids:?}"
+        );
+        let config = ToolServerConfig {
+            tools: ids.into_iter().map(ToolConfig::from_id).collect(),
+            behavior_preset: None,
+        };
+        let tmp = TempDir::new().unwrap();
+        let render = |session: &str| {
+            let ctx = SessionContext {
+                session_folder: tmp.path().join("sessions").join(session),
+                state_path: tmp.path().join("sessions").join(session).join("state.json"),
+                owner_session_id: Some(session.to_owned()),
+                ..test_session_context(&tmp)
+            };
+            let toolset = ToolRegistryBuilder::new()
+                .finalize(config.clone(), ctx)
+                .expect("every GrokBuild tool should finalize");
+            let definitions: Vec<serde_json::Value> = toolset
+                .tool_definitions()
+                .into_iter()
+                .map(|definition| {
+                    serde_json::json!({
+                        "name": definition.function.name,
+                        "description": definition.function.description,
+                        "parameters": definition.function.parameters,
+                    })
+                })
+                .collect();
+            serde_json::to_string_pretty(&definitions).unwrap()
+        };
+        let first = render("session-a");
+        assert!(first.contains("\"name\": \"send_feedback\""), "{first}");
+        pretty_assertions::assert_eq!(first, render("session-b"));
     }
     /// Bash mode resolves the toolset's execute tool by kind, not a hardcoded
     /// name: `run_terminal_cmd` (grok).

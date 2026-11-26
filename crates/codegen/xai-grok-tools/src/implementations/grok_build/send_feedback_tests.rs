@@ -49,6 +49,13 @@ async fn run(
     run_tool(session_folder, tool_input(input)).await
 }
 
+fn saved_message(session_folder: &std::path::Path) -> String {
+    format!(
+        "Local feedback draft saved to {}.",
+        session_folder.join(FEEDBACK_DRAFTS_FILENAME).display()
+    )
+}
+
 #[tokio::test]
 async fn valid_inputs_append_canonical_drafts_and_omit_absent_optionals() {
     let session = tempfile::tempdir().unwrap();
@@ -64,7 +71,7 @@ async fn valid_inputs_append_canonical_drafts_and_omit_absent_optionals() {
     sparse.task_category = None;
 
     let output = run(session.path(), full.clone()).await.unwrap();
-    assert_eq!(output.message, SUCCESS_MESSAGE);
+    assert_eq!(output.message, saved_message(session.path()));
     run(session.path(), sparse.clone()).await.unwrap();
 
     let stored: Vec<(FeedbackDraftInput, u64)> = FeedbackDraftStore::new(session.path())
@@ -116,14 +123,14 @@ async fn storage_and_join_failures_are_execution_errors() {
         storage_error.kind,
         xai_tool_runtime::ToolErrorKind::Execution
     );
-    assert!(!storage_error.detail.contains(SUCCESS_MESSAGE));
+    assert!(!storage_error.detail.contains("draft saved"));
 
     let join_error = tokio::task::spawn_blocking(|| panic!("test panic"))
         .await
         .unwrap_err();
     let join_error = map_append_result(Err(join_error)).unwrap_err();
     assert_eq!(join_error.kind, xai_tool_runtime::ToolErrorKind::Execution);
-    assert!(!join_error.detail.contains(SUCCESS_MESSAGE));
+    assert!(!join_error.detail.contains("draft saved"));
 }
 
 #[tokio::test]
@@ -141,7 +148,7 @@ async fn draft_id_updates_existing_draft_instead_of_appending() {
 
     let output = run_tool(session.path(), update).await.unwrap();
 
-    assert_eq!(output.message, SUCCESS_MESSAGE);
+    assert_eq!(output.message, saved_message(session.path()));
     let drafts = FeedbackDraftStore::new(session.path()).list().unwrap();
     let [draft] = drafts.as_slice() else {
         panic!("expected exactly one draft: {drafts:?}");
