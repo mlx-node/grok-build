@@ -378,9 +378,8 @@ impl SessionActor {
         }
     }
     /// Tracing log for buffered xAI notifications emerging from emit_buffered.
-    /// Mirrors `log_outbound_notification` for ACP.
-    /// Both log at DEBUG: `GROK_LOG_FILE` (DEBUG default) or `RUST_LOG=acp_event=debug` shows them; the `--debug` /
-    /// `--debug-file` firehose drops them, since `acp_event` is not in its allowlist.
+    /// Mirrors `log_outbound_notification` for ACP. Both log at DEBUG: the firehose filter (`--debug-file`, or `--debug`
+    /// without `GROK_LOG_FILE`) drops them; `GROK_LOG_FILE` (`RUST_LOG`, DEBUG by default) keeps them.
     fn log_outbound_xai_buffered(&self, notification: &XaiSessionNotification) {
         if !matches!(
             notification.update,

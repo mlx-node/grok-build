@@ -82,7 +82,7 @@ impl WaitSubject {
 fn still_running_do_not_cancel(subject: WaitSubject) -> String {
     let noun = subject.noun();
     // Bash tasks have no follow-up channel; only subagents can be told to stop.
-    // "Do other work" next to a running subagent led parents to redo the subagent's own job.
+    // Never tell the parent of a running subagent to "do other work": it then redoes the subagent's job.
     let (cancel_clause, other_work) = match subject {
         WaitSubject::Subagent => (
             format!(
