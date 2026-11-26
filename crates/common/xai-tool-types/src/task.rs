@@ -374,8 +374,7 @@ impl SubagentCompletedOutput {
 /// wrappers and can make UIs hide the whole spawn result as a reminder block.
 /// Harness-owned reminders go through `format_with_reminders` with
 /// `system_reminder_tag`.
-pub const BACKGROUND_SUBAGENT_CONTINUE_PARENT_WORK: &str =
-    "Do not only poll the child. Continue unfinished parent work now.";
+pub const BACKGROUND_SUBAGENT_CONTINUE_PARENT_WORK: &str = "While it runs, do not start the same work yourself. Continue only parent work it does not cover.";
 
 /// How many asks *before* the latest one may still count as leftover parent
 /// exec. Older implement/fix history after the user switched to review-only
@@ -2336,6 +2335,27 @@ mod tests {
                 && !poll_only.contains(BACKGROUND_SUBAGENT_CONTINUE_PARENT_WORK),
             "no leftover parent work must not get the CTA: {poll_only}"
         );
+    }
+
+    #[test]
+    fn background_spawn_cta_forbids_redoing_the_child_job() {
+        let cta = "While it runs, do not start the same work yourself. \
+                   Continue only parent work it does not cover.";
+        let with_cta = format_subagent_started_background(
+            "sa-1",
+            "triage findings",
+            &BackgroundNoticeNaming::CANONICAL,
+            true,
+        );
+        assert!(with_cta.ends_with(cta), "{with_cta}");
+
+        let without = format_subagent_started_background(
+            "sa-1",
+            "triage findings",
+            &BackgroundNoticeNaming::CANONICAL,
+            false,
+        );
+        assert!(!without.contains(cta), "{without}");
     }
 
     #[test]

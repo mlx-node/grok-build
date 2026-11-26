@@ -82,16 +82,23 @@ impl WaitSubject {
 fn still_running_do_not_cancel(subject: WaitSubject) -> String {
     let noun = subject.noun();
     // Bash tasks have no follow-up channel; only subagents can be told to stop.
-    let cancel_clause = match subject {
-        WaitSubject::Subagent => {
-            format!("Unless the user specified, do not kill this {noun} and do not tell it to stop")
-        }
-        WaitSubject::Task => format!("Unless the user specified, do not kill this {noun}"),
+    // "Do other work" next to a running subagent led parents to redo the subagent's own job.
+    let (cancel_clause, other_work) = match subject {
+        WaitSubject::Subagent => (
+            format!(
+                "Unless the user specified, do not kill this {noun} and do not tell it to stop"
+            ),
+            "Do work it does not cover",
+        ),
+        WaitSubject::Task => (
+            format!("Unless the user specified, do not kill this {noun}"),
+            "Do other work",
+        ),
     };
     format!(
         "{cancel_clause} just because this wait returned. \
          It is still working. You will be notified automatically when it completes. \
-         Do other work, or wait again with a longer timeout_ms."
+         {other_work}, or wait again with a longer timeout_ms."
     )
 }
 
@@ -1161,7 +1168,7 @@ mod tests {
         );
         assert_eq!(
             still_running_wait_hint(WaitHint::NotRequested, WaitSubject::Subagent),
-            "Use timeout_ms to wait for completion. Unless the user specified, do not kill this subagent and do not tell it to stop just because this wait returned. It is still working. You will be notified automatically when it completes. Do other work, or wait again with a longer timeout_ms."
+            "Use timeout_ms to wait for completion. Unless the user specified, do not kill this subagent and do not tell it to stop just because this wait returned. It is still working. You will be notified automatically when it completes. Do work it does not cover, or wait again with a longer timeout_ms."
         );
     }
 
@@ -1177,7 +1184,7 @@ mod tests {
         );
         assert_eq!(
             still_running_wait_hint(hint, WaitSubject::Subagent),
-            "Waited the requested 30s. Unless the user specified, do not kill this subagent and do not tell it to stop just because this wait returned. It is still working. You will be notified automatically when it completes. Do other work, or wait again with a longer timeout_ms."
+            "Waited the requested 30s. Unless the user specified, do not kill this subagent and do not tell it to stop just because this wait returned. It is still working. You will be notified automatically when it completes. Do work it does not cover, or wait again with a longer timeout_ms."
         );
     }
 
@@ -1193,7 +1200,7 @@ mod tests {
         );
         assert_eq!(
             still_running_wait_hint(hint, WaitSubject::Subagent),
-            "Waited 600s, the per-call maximum, of the 2400s you requested. Unless the user specified, do not kill this subagent and do not tell it to stop just because this wait returned. It is still working. You will be notified automatically when it completes. Do other work, or wait again with a longer timeout_ms."
+            "Waited 600s, the per-call maximum, of the 2400s you requested. Unless the user specified, do not kill this subagent and do not tell it to stop just because this wait returned. It is still working. You will be notified automatically when it completes. Do work it does not cover, or wait again with a longer timeout_ms."
         );
     }
 
@@ -1205,7 +1212,7 @@ mod tests {
         );
         assert_eq!(
             still_running_wait_hint(WaitHint::ReturnedEarly, WaitSubject::Subagent),
-            "Wait returned early because another finished. Unless the user specified, do not kill this subagent and do not tell it to stop just because this wait returned. It is still working. You will be notified automatically when it completes. Do other work, or wait again with a longer timeout_ms."
+            "Wait returned early because another finished. Unless the user specified, do not kill this subagent and do not tell it to stop just because this wait returned. It is still working. You will be notified automatically when it completes. Do work it does not cover, or wait again with a longer timeout_ms."
         );
     }
 
