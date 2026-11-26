@@ -431,7 +431,7 @@ pub(crate) trait Reducer {
 /// The reducer for `format`, or `None` for `plain`/`json` (rendered directly).
 pub(crate) fn reducer_for(format: OutputFormat) -> Option<Box<dyn Reducer>> {
     match format {
-        OutputFormat::StreamingJson => Some(Box::new(AcpReducer)),
+        OutputFormat::StreamingJson => Some(Box::new(AcpReducer::default())),
         OutputFormat::StreamingMessagesJson => Some(Box::new(MessagesReducer::new())),
         OutputFormat::Plain | OutputFormat::Json => None,
     }

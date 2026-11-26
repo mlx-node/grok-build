@@ -232,7 +232,7 @@ Event types:
 | `tool_call_update` | Progress or result for a tool call (`status`, `rawOutput`, `content`, `locations`)            |
 | `usage`            | Per-response boundary (`messageId`, `stopReason`, `usage`, `signature`), one per model response |
 | `plan`             | The agent's current plan (`entries`)                                                          |
-| `available_commands` | Tool and slash command lists (`tools`, `commands`)                                          |
+| `available_commands` | Tool and slash command lists (`tools`, `commands`), emitted when the lists change           |
 | `end`              | Final event with metadata and spend fields when available                                    |
 | `error`            | An error occurred (carries `message`, and spend fields if any)                               |
 

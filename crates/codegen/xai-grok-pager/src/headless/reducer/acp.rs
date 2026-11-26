@@ -114,7 +114,11 @@ struct AcpEndLine<'a> {
 }
 
 /// `streaming-json`: native ACP session updates, one object per line.
-pub(crate) struct AcpReducer;
+#[derive(Default)]
+pub(crate) struct AcpReducer {
+    /// The shell re-sends an unchanged list after every model response to carry `_meta.totalTokens`, which this format drops.
+    last_commands: Option<(Vec<String>, Vec<String>)>,
+}
 
 impl Reducer for AcpReducer {
     fn reduce(&mut self, event: StreamEvent) -> Vec<Value> {
@@ -143,7 +147,19 @@ impl Reducer for AcpReducer {
                 tools,
                 commands,
                 skills: _,
-            } => AcpLine::AvailableCommands { tools, commands },
+            } => {
+                if self
+                    .last_commands
+                    .as_ref()
+                    .is_some_and(|(last_tools, last_commands)| {
+                        *last_tools == tools && *last_commands == commands
+                    })
+                {
+                    return vec![];
+                }
+                self.last_commands = Some((tools.clone(), commands.clone()));
+                AcpLine::AvailableCommands { tools, commands }
+            }
             StreamEvent::Lifecycle(l) => return vec![to_line(&acp_lifecycle_line(l))],
             // Only the Messages reducer consumes these, for its `--include-partial-messages` framing
             StreamEvent::ResponseStarted { .. } | StreamEvent::ReasoningCompleted { .. } => {
