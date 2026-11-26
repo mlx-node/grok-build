@@ -493,6 +493,7 @@ fn build_headless_init_request(
             "startupHints".into(),
             serde_json::json!({
                 "nonInteractive": true,
+                "skipTurnSummary": true,
             }),
         );
     }

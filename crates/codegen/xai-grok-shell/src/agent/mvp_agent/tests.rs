@@ -984,6 +984,20 @@ fn startup_hints_from_meta_adopts_session_traceparent_only() {
     );
 }
 #[test]
+fn startup_hints_from_meta_reads_skip_turn_summary() {
+    let one_shot = serde_json::json!({
+        "startupHints": { "nonInteractive": true, "skipTurnSummary": true }
+    });
+    assert!(startup_hints_from_meta(None, one_shot.as_object()).skip_turn_summary);
+    let attached = serde_json::json!({ "startupHints": { "nonInteractive": true } });
+    let hints = startup_hints_from_meta(None, attached.as_object());
+    assert!(
+        hints.non_interactive,
+        "a hint object without the key still parses"
+    );
+    assert!(!hints.skip_turn_summary);
+}
+#[test]
 fn startup_hints_from_meta_unparseable_falls_through_then_defaults() {
     let bad = serde_json::json!({ "startupHints": "yes" });
     let init = serde_json::json!({ "startupHints": { "nonInteractive": true } });

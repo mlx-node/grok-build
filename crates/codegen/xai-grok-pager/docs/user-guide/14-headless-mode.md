@@ -230,7 +230,7 @@ Event types:
 | `thought`          | Internal reasoning (thinking tokens)                                                          |
 | `tool_call`        | A tool call the agent started (`toolCallId`, `toolName`, `kind`, `status`, `rawInput`, `content`, `locations`) |
 | `tool_call_update` | Progress or result for a tool call (`status`, `rawOutput`, `content`, `locations`)            |
-| `usage`            | Per-response boundary (`messageId`, `stopReason`, `usage`, `signature`), one per model response |
+| `usage`            | Per-response boundary (`messageId`, `stopReason`, `usage`, `signature`), one per model response of the main session; a subagent's or workflow child's responses print none, and `end` still counts their spend |
 | `plan`             | The agent's current plan (`entries`)                                                          |
 | `available_commands` | Tool and slash command lists (`tools`, `commands`), emitted when the lists change           |
 | `end`              | Final event with metadata and spend fields when available                                    |

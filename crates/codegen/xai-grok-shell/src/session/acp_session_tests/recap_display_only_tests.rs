@@ -929,9 +929,9 @@ async fn turn_summary_bails_when_newer_turn_already_running() {
         .await;
 }
 
-/// A non-interactive attachment (headless `-p`) exits right after the turn, so no summary task is spawned for it.
+/// Only the one-shot `-p` client opts out with `skipTurnSummary`; an SDK attachment that is just `nonInteractive` stays connected and gets its summary.
 #[tokio::test(flavor = "current_thread")]
-async fn turn_summary_skipped_for_non_interactive_attachment() {
+async fn turn_summary_skipped_only_for_one_shot_client() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
@@ -939,28 +939,36 @@ async fn turn_summary_skipped_for_non_interactive_attachment() {
                 tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
             let (persistence_tx, mut prx) =
                 tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
-            let mut actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
-            actor.turn_summary_enabled = true;
-            let actor = std::sync::Arc::new(actor);
+            let mut one_shot = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
+            one_shot.turn_summary_enabled = true;
+            one_shot.startup_hints.skip_turn_summary = true;
+            let one_shot = std::sync::Arc::new(one_shot);
 
-            actor.attach_non_interactive.set(true);
-            actor.restart_turn_summary("pid-headless".into());
+            one_shot.restart_turn_summary("pid-one-shot".into());
             assert!(
-                actor.turn_summary_task.borrow().is_none(),
-                "non-interactive attachment: no task spawned"
+                one_shot.turn_summary_task.borrow().is_none(),
+                "skipTurnSummary: no task spawned"
             );
             assert!(
                 prx.try_recv().is_err(),
                 "no persistence write for a skipped summary"
             );
 
-            actor.attach_non_interactive.set(false);
-            actor.restart_turn_summary("pid-interactive".into());
+            let (gateway_tx, _grx) =
+                tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+            let (persistence_tx, _prx) = tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+            let mut attached = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
+            attached.turn_summary_enabled = true;
+            attached.startup_hints.non_interactive = true;
+            let attached = std::sync::Arc::new(attached);
+            attached.attach_non_interactive.set(true);
+
+            attached.restart_turn_summary("pid-attached".into());
             assert!(
-                actor.turn_summary_task.borrow().is_some(),
-                "interactive attachment: task spawned"
+                attached.turn_summary_task.borrow().is_some(),
+                "a nonInteractive client without skipTurnSummary: task spawned"
             );
-            actor.abort_turn_summary();
+            attached.abort_turn_summary();
         })
         .await;
 }

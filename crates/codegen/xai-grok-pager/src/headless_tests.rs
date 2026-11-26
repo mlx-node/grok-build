@@ -182,6 +182,20 @@ fn s(v: &str) -> String {
 }
 
 #[test]
+fn headless_init_request_asks_to_skip_the_turn_summary() {
+    let request = build_headless_init_request(None, None);
+    let hints = request
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.get("startupHints"))
+        .expect("the headless init request carries startupHints");
+    assert_eq!(
+        hints,
+        &serde_json::json!({ "nonInteractive": true, "skipTurnSummary": true })
+    );
+}
+
+#[test]
 fn headless_materialize_ctx_stays_non_chat() {
     use crate::app::session_startup::TitleResolution;
     for pinned in [false, true] {

@@ -599,6 +599,10 @@ pub struct FeedbackContext {
 pub struct StartupHints {
     #[serde(default)]
     pub non_interactive: bool,
+    /// Sent by the one-shot `-p` client, which exits as soon as the turn ends: shutdown would abort the summary before it is shown or saved.
+    /// Other non-interactive clients (SDK attachments) stay connected and keep their summaries.
+    #[serde(default)]
+    pub skip_turn_summary: bool,
     /// Leading conversation items to preserve verbatim across compaction (the immutable head).
     /// A fresh subagent's head is its spawn-injected items; a `resume_from` subagent's is just the System head so the resumed body stays compactable.
     #[serde(default)]
