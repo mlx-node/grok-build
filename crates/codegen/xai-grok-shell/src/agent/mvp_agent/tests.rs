@@ -5379,6 +5379,18 @@ fn cold_load_stamps_identity_exactly_once() {
         agent.remove_session(&sid);
     });
 }
+/// A rollback waits out the withdrawn actor's thread only for `DRAIN_OLD_THREAD_WAIT`; the thread holds the
+/// actor's toolset until its teardown ends, and that teardown (an FSEvents stream stop on macOS) can take longer under load.
+async fn assert_toolset_released(
+    toolset: &std::sync::Weak<xai_grok_tools::registry::types::FinalizedToolset>,
+    message: &str,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while toolset.strong_count() > 0 {
+        assert!(std::time::Instant::now() < deadline, "{message}");
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
 #[test]
 fn failed_identity_stamp_fails_the_cold_load_closed() {
     run_local_for_bridge_test(|| async {
@@ -5419,10 +5431,11 @@ fn failed_identity_stamp_fails_the_cold_load_closed() {
             workspace_session_count(&agent),
             "the failed install must release its workspace binding"
         );
-        assert!(
-            toolset.upgrade().is_none(),
-            "nothing may keep the failed install's toolset alive"
-        );
+        assert_toolset_released(
+            &toolset,
+            "nothing may keep the failed install's toolset alive",
+        )
+        .await;
     });
 }
 /// The binding follows the registry's decision: an install the registry refuses never touches the
@@ -5635,10 +5648,11 @@ fn stamp_rollback_leaves_a_binding_taken_during_the_stamp_intact() {
             std::sync::Arc::ptr_eq(&newer_toolset, &workspace_toolset(&agent, &sid)),
             "the newer binding stays in place"
         );
-        assert!(
-            installed_toolset.upgrade().is_none(),
-            "nothing may keep the withdrawn install's toolset alive"
-        );
+        assert_toolset_released(
+            &installed_toolset,
+            "nothing may keep the withdrawn install's toolset alive",
+        )
+        .await;
     });
 }
 /// Nothing of a withdrawn install may survive: no resident, no directory row, no workspace binding.
