@@ -929,6 +929,42 @@ async fn turn_summary_bails_when_newer_turn_already_running() {
         .await;
 }
 
+/// A non-interactive attachment (headless `-p`) exits right after the turn, so no summary task is spawned for it.
+#[tokio::test(flavor = "current_thread")]
+async fn turn_summary_skipped_for_non_interactive_attachment() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _grx) =
+                tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+            let (persistence_tx, mut prx) =
+                tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+            let mut actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
+            actor.turn_summary_enabled = true;
+            let actor = std::sync::Arc::new(actor);
+
+            actor.attach_non_interactive.set(true);
+            actor.restart_turn_summary("pid-headless".into());
+            assert!(
+                actor.turn_summary_task.borrow().is_none(),
+                "non-interactive attachment: no task spawned"
+            );
+            assert!(
+                prx.try_recv().is_err(),
+                "no persistence write for a skipped summary"
+            );
+
+            actor.attach_non_interactive.set(false);
+            actor.restart_turn_summary("pid-interactive".into());
+            assert!(
+                actor.turn_summary_task.borrow().is_some(),
+                "interactive attachment: task spawned"
+            );
+            actor.abort_turn_summary();
+        })
+        .await;
+}
+
 /// A real user prompt aborts an in-flight summary generation: its result would describe a conversation the prompt is about to extend.
 /// (A newer completion aborts via `restart_turn_summary` the same way.)
 #[tokio::test(flavor = "current_thread")]
