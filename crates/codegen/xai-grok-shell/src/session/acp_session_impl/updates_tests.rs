@@ -166,6 +166,7 @@ async fn orphan_finish_without_token_record_persists_once_and_stops_reheal() {
                     identity: None,
                     next_trace_turn: None,
                 },
+                None,
             )
             .await
             .expect("persistence actor");
@@ -264,6 +265,7 @@ async fn duplicate_spawn_after_finish_is_not_persisted_or_rehealed() {
                     identity: None,
                     next_trace_turn: None,
                 },
+                None,
             )
             .await
             .expect("persistence actor");

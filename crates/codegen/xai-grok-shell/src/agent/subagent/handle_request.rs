@@ -1201,6 +1201,7 @@ pub(crate) async fn run_shell_child(
                 next_trace_turn: Some(turn_number.saturating_add(1)),
             }
         },
+        Some(request.description.as_str()),
     )
     .await
     {

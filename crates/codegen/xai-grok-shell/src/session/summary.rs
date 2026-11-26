@@ -5,7 +5,9 @@
 
 use crate::extensions::notification::{SessionNotification, SessionUpdate as XaiSessionUpdate};
 use crate::sampling::Client as OaiCompatClient;
-use crate::session::helpers::session_summary::generate_session_summary;
+use crate::session::helpers::session_summary::{
+    generate_session_summary, title_fallback_from_user_text,
+};
 use crate::session::info::Info;
 use crate::session::persistence::PersistenceMsg;
 use agent_client_protocol as acp;
@@ -22,6 +24,8 @@ enum State {
 pub(crate) struct SummaryConfig {
     pub(crate) sampling_client: OaiCompatClient,
     pub(crate) model: String,
+    /// `false`: the title is the first prompt's leading words, with no model call.
+    pub(crate) llm: bool,
     /// Channel back to the persistence actor for sequential storage writes.
     /// Weak: a strong sender here would keep the actor's own channel and task alive.
     pub(crate) persistence_tx: mpsc::WeakUnboundedSender<PersistenceMsg>,
@@ -57,29 +61,22 @@ impl SummaryGenerator {
                 // Transition to Done so subsequent ContentChunk messages don't spawn duplicate title generation tasks
                 self.state = State::Done;
 
+                let persistence_tx = self.config.persistence_tx.clone();
+                if !self.config.llm {
+                    send_generated_title(&persistence_tx, title_fallback_from_user_text(&content));
+                    return;
+                }
                 let sampling_client = self.config.sampling_client.clone();
                 let model = self.config.model.clone();
-                let persistence_tx = self.config.persistence_tx.clone();
 
                 // A background task runs the LLM call so the persistence actor keeps processing messages (updates, flushes)
                 tokio::spawn(async move {
                     let mut title =
                         generate_session_summary(content.clone(), sampling_client, &model).await;
                     if title.trim().is_empty() {
-                        title =
-                            crate::session::helpers::session_summary::title_fallback_from_user_text(
-                                &content,
-                            );
+                        title = title_fallback_from_user_text(&content);
                     }
-
-                    // The actor persists the title (only if the session has no title yet) and notifies the client there
-                    // If a manual `/rename` won the race, the actor rejects the generated title, so it never reaches the client
-                    match persistence_tx.upgrade() {
-                        Some(tx) => {
-                            let _ = tx.send(PersistenceMsg::GeneratedTitle(title));
-                        }
-                        None => tracing::debug!("session closed before its title was generated"),
-                    }
+                    send_generated_title(&persistence_tx, title);
                 });
             }
         }
@@ -98,6 +95,17 @@ impl SummaryGenerator {
     #[cfg(test)]
     pub(crate) fn is_idle(&self) -> bool {
         matches!(self.state, State::Idle)
+    }
+}
+
+/// The actor persists the title (only if the session has no title yet) and notifies the client there.
+/// If a manual `/rename` won the race, the actor rejects the generated title, so it never reaches the client.
+fn send_generated_title(persistence_tx: &mpsc::WeakUnboundedSender<PersistenceMsg>, title: String) {
+    match persistence_tx.upgrade() {
+        Some(tx) => {
+            let _ = tx.send(PersistenceMsg::GeneratedTitle(title));
+        }
+        None => tracing::debug!("session closed before its title was generated"),
     }
 }
 
@@ -249,6 +257,7 @@ mod tests {
         let mut generator = SummaryGenerator::new(SummaryConfig {
             sampling_client,
             model: String::new(),
+            llm: true,
             persistence_tx: tx.downgrade(),
         });
         assert!(generator.is_idle());

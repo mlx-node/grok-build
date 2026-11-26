@@ -83,6 +83,7 @@ async fn new_with_explicit_dir_overrides_worktree_stamp_so_subagent_stays_hidden
             identity: None,
             next_trace_turn: None,
         },
+        None,
     )
     .await
     .unwrap();
@@ -120,6 +121,7 @@ async fn new_with_explicit_dir_stores_requested_identity() {
             }),
             next_trace_turn: Some(3),
         },
+        None,
     )
     .await
     .unwrap();

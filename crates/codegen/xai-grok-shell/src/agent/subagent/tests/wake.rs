@@ -1196,3 +1196,75 @@ async fn workflow_child_first_request_lists_parent_skills() {
         })
         .await;
 }
+
+/// Mutations that turn it red: pass no label from `run_shell_child` (the title becomes the prompt's words),
+/// and keep the model title call for children.
+#[tokio::test(flavor = "current_thread")]
+async fn child_title_is_its_description_with_no_title_call() {
+    use xai_grok_tools::implementations::grok_build::task::backend::{
+        ChannelBackend, SubagentBackend,
+    };
+    use xai_grok_tools::implementations::grok_build::task::coordinator::{
+        CoordinatorConfig, SubagentCoordinator,
+    };
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let workdir = tempfile::TempDir::new().expect("workdir");
+            let meta = tempfile::TempDir::new().expect("meta dir");
+            let server = xai_grok_test_support::MockInferenceServer::start()
+                .await
+                .expect("mock server");
+            server.set_response("label probe output");
+            let mut ctx = ctx_with_toggle(HashMap::new());
+            configure_completion_harness(
+                &mut ctx,
+                &server,
+                RunShellChildHarnessConfig::new(
+                    meta.path().to_path_buf(),
+                    InitialAttemptBehavior::Normal,
+                ),
+            );
+            ctx.parent_cwd = workdir.path().to_path_buf();
+            let (parent_cmd_tx, parent_cmd_rx) = mpsc::unbounded_channel();
+            ctx.parent_cmd_tx = Some(parent_cmd_tx);
+            let usage_ack = tokio::task::spawn_local(acknowledge_parent_usage(parent_cmd_rx));
+            let (gateway, _gateway_rx) = test_gateway_with_receiver();
+            let (command_tx, command_rx) =
+                SubagentCoordinator::<RunShellChildTestRunner>::channel();
+            let coordinator = tokio::task::spawn_local(
+                SubagentCoordinator::from_channel(
+                    command_rx,
+                    RunShellChildTestRunner::new([ctx], false, gateway),
+                    CoordinatorConfig::default(),
+                )
+                .run(),
+            );
+            let backend = ChannelBackend::for_coordinator_session(command_tx, "setup-parent");
+            let id = uuid::Uuid::now_v7().to_string();
+            let mut request = auto_wake_test_request(&id);
+            request.prompt = "Walk the folder and name each file you find in it".to_owned();
+            request.description = "track:alpha".to_owned();
+            let result = backend.spawn(request, None).await.expect("child spawn");
+            assert!(result.success, "child run: {:?}", result.error);
+            drop(backend);
+            coordinator.await.expect("coordinator");
+            usage_ack.abort();
+
+            let child_dir = crate::session::persistence::session_dir(&SessionInfo {
+                id: acp::SessionId::new(id),
+                cwd: workdir.path().to_string_lossy().into_owned(),
+            });
+            let summary: crate::session::persistence::Summary = serde_json::from_slice(
+                &std::fs::read(child_dir.join("summary.json")).expect("child summary"),
+            )
+            .expect("parse child summary");
+            assert_eq!(summary.display_title(), "track:alpha");
+            let title_requests = server
+                .request_bodies()
+                .into_iter()
+                .filter(|body| body.to_string().contains("session_title"))
+                .count();
+            assert_eq!(title_requests, 0);
+        })
+        .await;
+}
