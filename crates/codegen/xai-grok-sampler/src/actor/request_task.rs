@@ -363,6 +363,11 @@ async fn apply_retry_decision(
     completion: &mut CompletionState,
     parent: &tracing::Span,
 ) -> bool {
+    let max_retries = if retry_mod::is_loopback_connect_error(err) {
+        max_retries.min(retry_mod::LOOPBACK_CONNECT_MAX_ATTEMPTS)
+    } else {
+        max_retries
+    };
     let rate_limit_threshold = config
         .rate_limit_retry_threshold
         .unwrap_or(retry_policy.rate_limit_retry_threshold);

@@ -12,6 +12,10 @@ pub const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(30);
 
 pub const TRANSPORT_REBUILD_BACKOFF: Duration = Duration::from_millis(200);
 
+/// Attempt cap for a connect failure to a loopback host. A local server (mlx serve) that is gone
+/// does not come back on the same ephemeral port, so the remote ladder (about 5.5 min) only delays the failure.
+pub const LOOPBACK_CONNECT_MAX_ATTEMPTS: u32 = 3;
+
 pub(crate) fn resolve_max_retries_with_env(
     env_override: Option<&str>,
     model_max_retries: Option<u32>,
@@ -90,6 +94,22 @@ pub enum RetryDecision {
     EmitToSession(SamplingError),
 
     Fatal(SamplingError),
+}
+
+pub fn is_loopback_connect_error(err: &SamplingError) -> bool {
+    match err {
+        SamplingError::Http(e) => e.is_connect() && e.url().is_some_and(is_loopback_url),
+        _ => false,
+    }
+}
+
+fn is_loopback_url(url: &reqwest::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Domain(domain)) => domain == "localhost",
+        None => false,
+    }
 }
 
 pub fn classify_error(
@@ -690,6 +710,74 @@ mod tests {
                 assert!(backoff >= Duration::from_millis(3200), "{backoff:?}");
             }
             other => panic!("expected Retry, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn refused_loopback_connect_fails_on_the_third_attempt() {
+        const CONNECT_GUARD: Duration = Duration::from_secs(5);
+
+        let port = {
+            let listener =
+                std::net::TcpListener::bind("127.0.0.1:0").expect("bind an ephemeral port");
+            listener.local_addr().expect("listener address").port()
+        };
+        let send_err = tokio::time::timeout(
+            CONNECT_GUARD,
+            reqwest::get(format!("http://127.0.0.1:{port}/v1/messages")),
+        )
+        .await
+        .expect("a refused loopback connect fails well within the guard")
+        .expect_err("nothing listens on the dropped port");
+        let err = SamplingError::Http(send_err);
+
+        assert!(
+            is_loopback_connect_error(&err),
+            "refused connect to 127.0.0.1 must be detected: {err:?}"
+        );
+        assert!(!is_loopback_connect_error(&api_err(
+            StatusCode::BAD_GATEWAY,
+            "upstream"
+        )));
+        let cap = LOOPBACK_CONNECT_MAX_ATTEMPTS;
+        assert!(matches!(
+            classify_error(&err, 0, cap, RATE_LIMIT_RETRY_THRESHOLD),
+            RetryDecision::RetryWithClientRebuild { .. }
+        ));
+        assert!(matches!(
+            classify_error(&err, 1, cap, RATE_LIMIT_RETRY_THRESHOLD),
+            RetryDecision::Retry { .. }
+        ));
+        assert!(matches!(
+            classify_error(&err, 2, cap, RATE_LIMIT_RETRY_THRESHOLD),
+            RetryDecision::Fatal(_)
+        ));
+        assert!(matches!(
+            classify_error(&err, 2, DEFAULT_MAX_RETRIES, RATE_LIMIT_RETRY_THRESHOLD),
+            RetryDecision::Retry { .. }
+        ));
+    }
+
+    #[test]
+    fn loopback_url_is_v4_loopback_v6_loopback_or_localhost() {
+        for loopback in [
+            "http://127.0.0.1:49707/v1",
+            "http://127.8.9.10:8080/v1",
+            "http://[::1]:8080/v1",
+            "http://localhost:8080/v1",
+            "http://LOCALHOST:8080/v1",
+        ] {
+            let url = reqwest::Url::parse(loopback).expect("valid url");
+            assert!(is_loopback_url(&url), "{loopback} is loopback");
+        }
+        for remote in [
+            "https://api.x.ai/v1",
+            "http://192.168.1.1:8080/v1",
+            "http://localhost.evil.com/v1",
+            "http://[2001:db8::1]:8080/v1",
+        ] {
+            let url = reqwest::Url::parse(remote).expect("valid url");
+            assert!(!is_loopback_url(&url), "{remote} is not loopback");
         }
     }
 

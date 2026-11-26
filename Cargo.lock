@@ -14590,6 +14590,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
  "xai-grok-auth",
  "xai-grok-extra-ca",

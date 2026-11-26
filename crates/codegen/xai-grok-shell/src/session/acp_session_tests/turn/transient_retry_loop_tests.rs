@@ -281,6 +281,78 @@ fn headless_exhausts_to_the_original_terminal() {
     });
 }
 
+/// The default sampler policy (15 attempts, about 5.5 min per request) against a refused local port:
+/// the loopback cap ends each of the step's 4 requests after 3 attempts.
+#[test]
+fn dead_loopback_server_fails_the_step_within_a_minute_and_a_half() {
+    on_session_stack(|| {
+        run_paused(|| async {
+            let server = MockInferenceServer::start_with_models(vec![MockModelEntry::new("test")])
+                .await
+                .expect("mock inference server");
+            let (actor, retries) = actor_under_test(
+                &server,
+                SessionKind::Main,
+                xai_grok_sampler::RetryPolicy::default(),
+                true,
+            )
+            .await;
+            let addr = reqwest::Url::parse(&server.url())
+                .expect("mock url")
+                .socket_addrs(|| None)
+                .expect("mock address")[0];
+            drop(server);
+            // The server task drops its listener after it sees the shutdown signal.
+            while tokio::net::TcpStream::connect(addr).await.is_ok() {
+                tokio::task::yield_now().await;
+            }
+
+            let started = tokio::time::Instant::now();
+            let outcome = tokio::time::timeout(
+                Duration::from_secs(3_600),
+                actor.process_conversation_turn_with_recovery(
+                    "req-dead-loopback-test",
+                    None,
+                    None,
+                    None,
+                    &mut length_salvage::LengthSalvage::new(None),
+                    &mut Default::default(),
+                ),
+            )
+            .await
+            .expect("turn must finish within timeout");
+            pump_local_tasks().await;
+            let elapsed = started.elapsed();
+
+            assert!(outcome.is_err(), "a dead local server must fail the turn");
+            // 4 x (0.2 s + 4 s) of sampler backoff plus the 2/10/30 s turn ladder, each +20% jitter at most: about 71 s.
+            assert!(
+                elapsed < Duration::from_secs(90),
+                "a refused loopback connect must not walk the 15-attempt ladder: {elapsed:?}"
+            );
+            let (turn_resubmits, sampler_retries): (Vec<_>, Vec<_>) = retrying_events(&retries)
+                .into_iter()
+                .partition(|(_, _, reason)| reason == "Connection problem; retrying request");
+            assert_eq!(
+                turn_resubmits.len(),
+                3,
+                "the turn arm keeps its 3 resubmits"
+            );
+            assert_eq!(
+                sampler_retries.len(),
+                8,
+                "2 sampler retries for each of the 4 requests: {sampler_retries:?}"
+            );
+            assert!(
+                sampler_retries.iter().all(|(_, max_retries, _)| {
+                    *max_retries == xai_grok_sampler::retry::LOOPBACK_CONNECT_MAX_ATTEMPTS
+                }),
+                "sampler Retrying events report the loopback cap: {sampler_retries:?}"
+            );
+        })
+    });
+}
+
 // Not covered here: IdleTimeout through the loop
 // The sampler's stall detection is I/O-time based, so it cannot fire under the paused clock
 // Eligibility for the kind is pinned at the handler level instead
