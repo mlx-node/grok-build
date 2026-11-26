@@ -520,13 +520,19 @@ fn current_dir_or_exit() -> PathBuf {
 fn scope_target(scope: McpScope) -> PathBuf {
     match scope {
         McpScope::User => xai_grok_shell::util::config::user_config_path(),
-        McpScope::Project => {
-            xai_grok_shell::util::config::project_config_path(&current_dir_or_exit())
-                .unwrap_or_else(|| {
-                    eprintln!("No project folder in the home folder; run this in a project.");
-                    std::process::exit(1);
-                })
-        }
+        McpScope::Project => project_add_target(&current_dir_or_exit()).unwrap_or_else(|message| {
+            eprintln!("{message}");
+            std::process::exit(1);
+        }),
+    }
+}
+
+/// The project config `mcp add` writes, creating the project agent folder (and its `.gitignore`) first.
+fn project_add_target(cwd: &Path) -> Result<PathBuf, String> {
+    match xai_dirs::ensure_project_agent_dir(cwd) {
+        Ok(Some(folder)) => Ok(folder.join(xai_grok_config::USER_CONFIG_FILENAME)),
+        Ok(None) => Err("No project folder in the home folder; run this in a project.".to_owned()),
+        Err(error) => Err(format!("Failed to create the project folder: {error}")),
     }
 }
 
@@ -1402,6 +1408,26 @@ url = "https://mcp.example.test/sse"
         let err = PagerArgs::try_parse_from(["grok", "mcp", "disable"])
             .expect_err("disable without name must fail");
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn project_add_target_creates_the_agent_folder_and_leaves_git_clean() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(tmp.path()).unwrap();
+        let path = project_add_target(tmp.path()).unwrap();
+        let folder = tmp.path().join(".mlx-agent");
+        assert_eq!(path, folder.join(xai_grok_config::USER_CONFIG_FILENAME));
+        std::fs::write(&path, "[mcp_servers.x]\ncommand = \"x\"\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(folder.join(".gitignore")).unwrap(),
+            "*\n"
+        );
+        let mut options = git2::StatusOptions::new();
+        options.include_untracked(true).recurse_untracked_dirs(true);
+        assert!(
+            repo.statuses(Some(&mut options)).unwrap().is_empty(),
+            "the writer leaves git status clean"
+        );
     }
 
     #[test]

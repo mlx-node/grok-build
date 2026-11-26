@@ -354,6 +354,27 @@ fn write_refuses_the_home_folder_whose_workspace_file_is_the_user_layer() {
     super::write_workspace_sandbox_mode_in(&ws, &grok_home, SandboxMode::Enforce).unwrap();
 }
 
+/// The write creates the folder's `.mlx-agent` with the `.gitignore` that keeps it out of git.
+#[test]
+fn write_creates_the_agent_folder_and_leaves_git_clean() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    let repo = git2::Repository::init(&ws).unwrap();
+    let grok_home = tmp.path().join("home").join(".mlx-agent");
+    super::write_workspace_sandbox_mode_in(&ws, &grok_home, SandboxMode::Enforce).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(ws.join(".mlx-agent").join(".gitignore")).unwrap(),
+        "*\n"
+    );
+    let mut options = git2::StatusOptions::new();
+    options.include_untracked(true).recurse_untracked_dirs(true);
+    assert!(
+        repo.statuses(Some(&mut options)).unwrap().is_empty(),
+        "the writer leaves git status clean"
+    );
+}
+
 /// A folder root relinked to the home folder after the user-layer check is caught on the held
 /// directory: the write is refused and the user layer is never written.
 #[cfg(unix)]

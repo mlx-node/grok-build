@@ -267,6 +267,7 @@ pub(super) async fn create_test_actor_with_memory(
         max_turns: None,
         pending_interjections: InterjectionBuffer::new(),
         pending_skill_reminders: Mutex::new(Vec::new()),
+        project_agent_dirs: std::sync::OnceLock::new(),
         idle_flush_timeout: memory_config
             .as_ref()
             .filter(|mc| mc.mode.is_legacy())

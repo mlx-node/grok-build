@@ -236,6 +236,7 @@ async fn test_e2e_idle_resume_refreshes_model_metadata() {
                 max_turns: None,
                 pending_interjections: InterjectionBuffer::new(),
                 pending_skill_reminders: Mutex::new(Vec::new()),
+                project_agent_dirs: std::sync::OnceLock::new(),
                 idle_flush_timeout: None,
                 dream_check_timeout: None,
                 last_idle_flush_conversation_len: std::sync::atomic::AtomicUsize::new(0),

@@ -288,16 +288,20 @@ pub fn write_workspace_sandbox_mode_in(
     #[cfg(test)]
     AFTER_USER_LAYER_CHECK.with_borrow_mut(|hook| hook.as_mut().map(|hook| hook()));
     let anchor = canonical_path(workspace_root);
-    let Some(folder) =
-        xai_dirs::project_agent_dir_in(&anchor, xai_dirs::home_dir().as_deref(), Some(grok_home))
-    else {
-        return Err(user_layer());
-    };
     let create_dir = |source| SandboxModeWriteError::CreateDir {
         path: path
             .parent()
             .map_or_else(|| path.clone(), Path::to_path_buf),
         source,
+    };
+    let Some(folder) = xai_dirs::ensure_project_agent_dir_in(
+        &anchor,
+        xai_dirs::home_dir().as_deref(),
+        Some(grok_home),
+    )
+    .map_err(create_dir)?
+    else {
+        return Err(user_layer());
     };
     let dir = HeldDir::open(&anchor, &folder, FileOwner::Any, true).map_err(create_dir)?;
     // The root may have been relinked since the check above; the held handle cannot be

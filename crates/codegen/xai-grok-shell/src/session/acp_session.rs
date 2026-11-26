@@ -865,6 +865,9 @@ pub(crate) struct SessionActor {
     /// Flushed at the same safe points as `pending_interjections`, plus on cancel/idle.
     /// The flush also delivers the plan tracker's buffered mid-turn activation reminder (see `activate_plan_mode_mid_turn`).
     pub(crate) pending_skill_reminders: Mutex<Vec<ConversationItem>>,
+    /// The project agent folders this session's tools could create: one per dir from the cwd up to the git root.
+    /// Resolved on the first tool round.
+    pub(crate) project_agent_dirs: std::sync::OnceLock<Vec<std::path::PathBuf>>,
     /// Idle flush timeout: `None` means disabled, `Some(duration)` flushes after that much inactivity.
     pub(crate) idle_flush_timeout: Option<std::time::Duration>,
     /// Periodic dream check interval: `None` means disabled.
@@ -2028,6 +2031,9 @@ mod memory_config_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/parallel_dispatch_tests.rs"]
 mod parallel_dispatch_tests;
+#[cfg(test)]
+#[path = "acp_session_tests/project_agent_dir_round_tests.rs"]
+mod project_agent_dir_round_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/prompt_context_persistence_tests.rs"]
 mod prompt_context_persistence_tests;

@@ -550,10 +550,19 @@ pub(crate) fn save_project_workflow(
         path: root.display().to_string(),
         error: error.to_string(),
     })?;
-    let Some(folder) = xai_dirs::project_agent_dir(&canonical_root) else {
-        return Err(ResolveError::NoProjectFolder {
-            path: canonical_root.display().to_string(),
-        });
+    let folder = match xai_dirs::ensure_project_agent_dir(&canonical_root) {
+        Ok(Some(folder)) => folder,
+        Ok(None) => {
+            return Err(ResolveError::NoProjectFolder {
+                path: canonical_root.display().to_string(),
+            });
+        }
+        Err(error) => {
+            return Err(ResolveError::Io {
+                path: canonical_root.display().to_string(),
+                error: error.to_string(),
+            });
+        }
     };
     let dir = folder.join("workflows");
     create_contained_workflow_dir(&canonical_root, &dir)?;
@@ -1052,6 +1061,26 @@ mod tests {
             resolve_by_path(&workflows.join("linked.rhai"), &project, None),
             Err(ResolveError::UntrustedPath { .. })
         ));
+    }
+
+    #[test]
+    fn save_creates_the_agent_folder_and_leaves_git_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        crate::agent::folder_trust::record_for_test(dir.path(), true);
+        let path = save_project_workflow(dir.path(), "saved", &script("saved")).unwrap();
+        let folder = dunce::canonicalize(dir.path()).unwrap().join(".mlx-agent");
+        assert_eq!(path, folder.join("workflows").join("saved.rhai"));
+        assert_eq!(
+            std::fs::read_to_string(folder.join(".gitignore")).unwrap(),
+            "*\n"
+        );
+        let mut options = git2::StatusOptions::new();
+        options.include_untracked(true).recurse_untracked_dirs(true);
+        assert!(
+            repo.statuses(Some(&mut options)).unwrap().is_empty(),
+            "the writer leaves git status clean"
+        );
     }
 
     #[test]

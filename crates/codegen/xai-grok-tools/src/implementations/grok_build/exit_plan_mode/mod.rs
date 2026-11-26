@@ -15,9 +15,9 @@
 //!
 //! ## Plan File
 //!
-//! The plan file path defaults to `.grok/plan.md` relative to the session
-//! `Cwd`. The tool reads it via the `FileSystem` resource (the same async FS
-//! abstraction used by `ReadFile` and `SearchReplace`).
+//! The plan file is the session's `PlanFilePath`. The tool reads it via the
+//! `FileSystem` resource (the same async FS abstraction used by `ReadFile` and
+//! `SearchReplace`).
 
 pub mod types;
 
@@ -193,6 +193,7 @@ mod tests {
     fn resources_with_cwd(cwd: &std::path::Path) -> Resources {
         let mut resources = Resources::new();
         resources.insert(Cwd(cwd.to_path_buf()));
+        resources.insert(PlanFilePath(cwd.join("plan.md")));
         resources.insert(FileSystem(Arc::new(LocalFs)));
         resources
     }
@@ -219,8 +220,7 @@ mod tests {
     #[tokio::test]
     async fn exit_with_plan_content() {
         let tmp = TempDir::new().unwrap();
-        let plan_dir = tmp.path().join(".grok");
-        std::fs::create_dir_all(&plan_dir).unwrap();
+        let plan_dir = tmp.path();
         std::fs::write(
             plan_dir.join("plan.md"),
             "# My Plan\n\n1. Do thing A\n2. Do thing B\n",
@@ -247,8 +247,10 @@ mod tests {
             } => {
                 assert!(plan_content.contains("Do thing A"));
                 assert!(plan_content.contains("Do thing B"));
-                // Cwd fallback now displays the resolved absolute path (shared resolver).
-                assert!(plan_file_path.ends_with(".grok/plan.md"));
+                assert_eq!(
+                    *plan_file_path,
+                    tmp.path().join("plan.md").display().to_string()
+                );
             }
             other => panic!("Expected PlanReady, got {:?}", other),
         }
@@ -257,8 +259,7 @@ mod tests {
     #[tokio::test]
     async fn exit_with_empty_plan_file() {
         let tmp = TempDir::new().unwrap();
-        let plan_dir = tmp.path().join(".grok");
-        std::fs::create_dir_all(&plan_dir).unwrap();
+        let plan_dir = tmp.path();
         std::fs::write(plan_dir.join("plan.md"), "   \n  \n").unwrap();
 
         let resources = resources_with_cwd(tmp.path());
@@ -300,8 +301,7 @@ mod tests {
         use crate::notification::types::{ToolNotification, ToolNotificationHandle};
 
         let tmp = TempDir::new().unwrap();
-        let plan_dir = tmp.path().join(".grok");
-        std::fs::create_dir_all(&plan_dir).unwrap();
+        let plan_dir = tmp.path();
         std::fs::write(plan_dir.join("plan.md"), "The plan").unwrap();
 
         let (handle, mut rx) = ToolNotificationHandle::channel();
@@ -323,10 +323,29 @@ mod tests {
             ToolNotification::PlanModeExited(exited) => {
                 assert_eq!(exited.tool_call_id, "call-99");
                 assert_eq!(exited.plan_content, Some("The plan".to_string()));
-                assert!(exited.plan_file_path.ends_with(".grok/plan.md"));
+                assert!(exited.plan_file_path.ends_with("plan.md"));
             }
             other => panic!("Expected PlanModeExited, got {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn a_cwd_alone_is_no_plan_file() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".grok")).unwrap();
+        std::fs::write(tmp.path().join(".grok").join("plan.md"), "GROKMARK").unwrap();
+        let mut resources = Resources::new();
+        resources.insert(Cwd(tmp.path().to_path_buf()));
+        resources.insert(FileSystem(Arc::new(LocalFs)));
+
+        let result = xai_tool_runtime::Tool::run(
+            &ExitPlanModeTool,
+            test_ctx_with_call_id(resources.into_shared(), "test-call"),
+            ExitPlanModeInput {},
+        )
+        .await;
+
+        assert!(result.is_err(), "a .grok plan is never read: {result:?}");
     }
 
     #[tokio::test]
@@ -349,8 +368,7 @@ mod tests {
     #[tokio::test]
     async fn prompt_format_includes_plan_content() {
         let tmp = TempDir::new().unwrap();
-        let plan_dir = tmp.path().join(".grok");
-        std::fs::create_dir_all(&plan_dir).unwrap();
+        let plan_dir = tmp.path();
         std::fs::write(plan_dir.join("plan.md"), "Step 1\nStep 2").unwrap();
 
         let resources = resources_with_cwd(tmp.path());
@@ -369,7 +387,7 @@ mod tests {
         let prompt = output.to_prompt_format();
         assert!(prompt.contains("Step 1"));
         assert!(prompt.contains("Step 2"));
-        assert!(prompt.contains(".grok/plan.md"));
+        assert!(prompt.contains("plan.md"));
     }
 
     // -- PlanFilePath resource tests --

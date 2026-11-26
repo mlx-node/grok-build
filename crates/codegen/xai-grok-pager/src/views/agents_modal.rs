@@ -647,6 +647,10 @@ pub fn create_persona_template(
     cwd: &Path,
 ) -> Result<PathBuf, String> {
     let sanitized = sanitize_config_name(name)?;
+    if matches!(scope, ConfigFileScope::Project) {
+        xai_dirs::ensure_project_agent_dir(cwd)
+            .map_err(|e| format!("Failed to create the project folder: {e}"))?;
+    }
     let personas_dir = personas_dir_for_scope(scope, cwd)?;
     if let Err(e) = std::fs::create_dir_all(&personas_dir) {
         return Err(format!("Failed to create personas directory: {e}"));
@@ -2646,6 +2650,31 @@ mod tests {
         assert_eq!(local.name, "local-only");
         assert_eq!(local.scope_label.as_deref(), Some("project"));
         assert!(local.source_path.is_some());
+    }
+    #[test]
+    fn project_persona_creates_the_agent_folder_and_leaves_git_clean() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let path = create_persona_template(
+            "helper",
+            "helps",
+            "always be helpful",
+            ConfigFileScope::Project,
+            dir.path(),
+        )
+        .expect("create");
+        let folder = dir.path().join(".mlx-agent");
+        assert_eq!(path, folder.join("personas").join("helper.toml"));
+        assert_eq!(
+            std::fs::read_to_string(folder.join(".gitignore")).unwrap(),
+            "*\n"
+        );
+        let mut options = git2::StatusOptions::new();
+        options.include_untracked(true).recurse_untracked_dirs(true);
+        assert!(
+            repo.statuses(Some(&mut options)).unwrap().is_empty(),
+            "the writer leaves git status clean"
+        );
     }
     #[test]
     fn create_persona_template_project_scope_writes_toml() {
