@@ -1526,7 +1526,9 @@ fn atomic_replace_string_replaces_project_config_symlink() {
 #[test]
 fn no_home_cwd_config_resolves_slot_not_follow() {
     let dir = tempfile::tempdir().unwrap();
-    let (link, outside) = project_slot_symlink(dir.path());
+    // The follow bind returns a canonical path; macOS temp dirs sit under the /var -> /private/var link.
+    let root = dunce::canonicalize(dir.path()).unwrap();
+    let (link, outside) = project_slot_symlink(&root);
     let followed = bind_user_config_dest_with(&link, true, true).unwrap();
     let slot = bind_user_config_dest_with(&link, true, false).unwrap();
     assert_eq!(
