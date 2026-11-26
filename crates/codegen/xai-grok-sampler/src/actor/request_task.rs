@@ -96,6 +96,11 @@ pub(crate) async fn run_request_task(
     } else {
         resolve_max_retries(configured_max_retries)
     };
+    let loopback_connect_cap = retry_mod::loopback_connect_cap(
+        std::env::var("GROK_LOOPBACK_CONNECT_MAX_ATTEMPTS")
+            .ok()
+            .as_deref(),
+    );
 
     // Build the initial client
     // Configuration errors here are fatal (no point retrying with the same broken config)
@@ -228,6 +233,7 @@ pub(crate) async fn run_request_task(
                     &err,
                     &mut retry_count,
                     effective_max_retries,
+                    loopback_connect_cap,
                     &retry_policy,
                     &event_tx,
                     &request_id,
@@ -303,6 +309,7 @@ pub(crate) async fn run_request_task(
                     &error,
                     &mut retry_count,
                     effective_max_retries,
+                    loopback_connect_cap,
                     &retry_policy,
                     &event_tx,
                     &request_id,
@@ -327,6 +334,7 @@ pub(crate) async fn run_request_task(
                     &error,
                     &mut retry_count,
                     effective_max_retries,
+                    loopback_connect_cap,
                     &retry_policy,
                     &event_tx,
                     &request_id,
@@ -353,6 +361,7 @@ async fn apply_retry_decision(
     err: &SamplingError,
     retry_count: &mut u32,
     max_retries: u32,
+    loopback_connect_cap: Option<u32>,
     retry_policy: &RetryPolicy,
     event_tx: &mpsc::UnboundedSender<SamplingEvent>,
     request_id: &RequestId,
@@ -363,10 +372,9 @@ async fn apply_retry_decision(
     completion: &mut CompletionState,
     parent: &tracing::Span,
 ) -> bool {
-    let max_retries = if retry_mod::is_loopback_connect_error(err) {
-        max_retries.min(retry_mod::LOOPBACK_CONNECT_MAX_ATTEMPTS)
-    } else {
-        max_retries
+    let max_retries = match loopback_connect_cap {
+        Some(cap) if retry_mod::is_loopback_connect_error(err) => max_retries.min(cap),
+        _ => max_retries,
     };
     let rate_limit_threshold = config
         .rate_limit_retry_threshold
@@ -1505,6 +1513,7 @@ mod tests {
             &error,
             &mut retry_count,
             2,
+            None,
             &RetryPolicy::default(),
             &event_tx,
             &RequestId::from("cancel-backoff"),
@@ -1535,8 +1544,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn configured_max_retries_below_the_loopback_cap_is_kept() {
+    /// The reqwest error of a connect to `host` on a port nothing listens on.
+    async fn refused_connect_error(host: &str) -> SamplingError {
         const CONNECT_GUARD: Duration = Duration::from_secs(5);
 
         let port = {
@@ -1546,17 +1555,25 @@ mod tests {
         };
         let send_err = tokio::time::timeout(
             CONNECT_GUARD,
-            reqwest::get(format!("http://127.0.0.1:{port}/v1/messages")),
+            reqwest::get(format!("http://{host}:{port}/v1/messages")),
         )
         .await
-        .expect("a refused loopback connect fails well within the guard")
+        .expect("a refused connect fails well within the guard")
         .expect_err("nothing listens on the dropped port");
-        let error = SamplingError::Http(send_err);
-        assert!(retry_mod::is_loopback_connect_error(&error), "{error:?}");
+        assert!(send_err.is_connect(), "{send_err:?}");
+        SamplingError::Http(send_err)
+    }
 
+    /// One retry decision at `retry_count`: whether the request goes on, and the `max_retries` its `Retrying` event reports.
+    async fn decide(
+        error: &SamplingError,
+        retry_count: u32,
+        max_retries: u32,
+        loopback_connect_cap: Option<u32>,
+    ) -> (bool, Option<u32>) {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let mut completion = CompletionState::new(None);
-        let mut retry_count = 0;
+        let mut retry_count = retry_count;
         let mut request = ConversationRequest::default();
         let config = SamplerConfig {
             base_url: "http://localhost".into(),
@@ -1566,12 +1583,13 @@ mod tests {
         let mut client = SamplingClient::new(config.clone()).expect("test client");
 
         let should_continue = apply_retry_decision(
-            &error,
+            error,
             &mut retry_count,
-            1,
+            max_retries,
+            loopback_connect_cap,
             &RetryPolicy::default(),
             &event_tx,
-            &RequestId::from("loopback-cap-1"),
+            &RequestId::from("loopback-cap"),
             &mut request,
             &mut client,
             &config,
@@ -1580,13 +1598,54 @@ mod tests {
             &tracing::Span::none(),
         )
         .await;
+        let reported = match event_rx.try_recv() {
+            Ok(SamplingEvent::Retrying { max_retries, .. }) => Some(max_retries),
+            _ => None,
+        };
+        (should_continue, reported)
+    }
 
-        assert!(!should_continue, "max_retries 1 allows no retry");
-        assert_eq!(retry_count, 0);
-        assert!(matches!(
-            event_rx.try_recv(),
-            Ok(SamplingEvent::Failed { .. })
-        ));
+    #[tokio::test]
+    async fn refused_loopback_connect_stops_at_the_opted_in_cap() {
+        let error = refused_connect_error("127.0.0.1").await;
+        assert!(retry_mod::is_loopback_connect_error(&error), "{error:?}");
+        tokio::time::pause();
+
+        assert_eq!(decide(&error, 1, 15, Some(3)).await, (true, Some(3)));
+        assert_eq!(decide(&error, 2, 15, Some(3)).await, (false, None));
+    }
+
+    #[tokio::test]
+    async fn refused_loopback_connect_without_a_cap_keeps_the_configured_retries() {
+        let error = refused_connect_error("127.0.0.1").await;
+        tokio::time::pause();
+
+        assert_eq!(decide(&error, 2, 8, None).await, (true, Some(8)));
+        assert_eq!(decide(&error, 7, 8, None).await, (false, None));
+    }
+
+    #[tokio::test]
+    async fn configured_max_retries_below_the_loopback_cap_is_kept() {
+        let error = refused_connect_error("127.0.0.1").await;
+
+        assert_eq!(decide(&error, 0, 1, Some(3)).await, (false, None));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn loopback_cap_leaves_an_error_that_is_not_a_connect_alone() {
+        let error = SamplingError::EventStreamError("retry me".into());
+
+        assert_eq!(decide(&error, 2, 15, Some(3)).await, (true, Some(15)));
+    }
+
+    #[tokio::test]
+    async fn loopback_cap_leaves_a_refused_connect_to_another_host_alone() {
+        // 0.0.0.0 reaches this machine without being a loopback address; a LAN address could reach a real host.
+        let error = refused_connect_error("0.0.0.0").await;
+        assert!(!retry_mod::is_loopback_connect_error(&error), "{error:?}");
+        tokio::time::pause();
+
+        assert_eq!(decide(&error, 2, 15, Some(3)).await, (true, Some(15)));
     }
 
     #[tokio::test]

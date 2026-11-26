@@ -281,10 +281,10 @@ fn headless_exhausts_to_the_original_terminal() {
     });
 }
 
-/// The default sampler policy (15 attempts, about 5.5 min per request) against a refused local port:
-/// the loopback cap ends each of the step's 4 requests after 3 attempts.
+/// With `GROK_LOOPBACK_CONNECT_MAX_ATTEMPTS` unset, a subagent's request to a refused local port walks all 15 attempts:
+/// a server that comes back on the same port within about 5 min is still reached.
 #[test]
-fn dead_loopback_server_fails_the_step_within_a_minute_and_a_half() {
+fn dead_loopback_server_without_the_cap_keeps_the_full_sampler_ladder() {
     on_session_stack(|| {
         run_paused(|| async {
             let server = MockInferenceServer::start_with_models(vec![MockModelEntry::new("test")])
@@ -292,9 +292,9 @@ fn dead_loopback_server_fails_the_step_within_a_minute_and_a_half() {
                 .expect("mock inference server");
             let (actor, retries) = actor_under_test(
                 &server,
-                SessionKind::Main,
+                SessionKind::Subagent,
                 xai_grok_sampler::RetryPolicy::default(),
-                true,
+                false,
             )
             .await;
             let addr = reqwest::Url::parse(&server.url())
@@ -325,29 +325,28 @@ fn dead_loopback_server_fails_the_step_within_a_minute_and_a_half() {
             let elapsed = started.elapsed();
 
             assert!(outcome.is_err(), "a dead local server must fail the turn");
-            // 4 x (0.2 s + 4 s) of sampler backoff plus the 2/10/30 s turn ladder, each +20% jitter at most: about 71 s.
+            // 0.2 + 4 + 8 + 16 + 10 x 30 s = 328.2 s of sampler backoff, -20% jitter at most.
             assert!(
-                elapsed < Duration::from_secs(90),
-                "a refused loopback connect must not walk the 15-attempt ladder: {elapsed:?}"
+                elapsed >= Duration::from_millis(262_560),
+                "an unset cap must not cut the sampler ladder short: {elapsed:?}"
             );
             let (turn_resubmits, sampler_retries): (Vec<_>, Vec<_>) = retrying_events(&retries)
                 .into_iter()
                 .partition(|(_, _, reason)| reason == "Connection problem; retrying request");
-            assert_eq!(
-                turn_resubmits.len(),
-                3,
-                "the turn arm keeps its 3 resubmits"
+            assert!(
+                turn_resubmits.is_empty(),
+                "a subagent has no turn-level resubmits: {turn_resubmits:?}"
             );
             assert_eq!(
                 sampler_retries.len(),
-                8,
-                "2 sampler retries for each of the 4 requests: {sampler_retries:?}"
+                14,
+                "15 attempts with GROK_LOOPBACK_CONNECT_MAX_ATTEMPTS unset: {sampler_retries:?}"
             );
             assert!(
                 sampler_retries.iter().all(|(_, max_retries, _)| {
-                    *max_retries == xai_grok_sampler::retry::LOOPBACK_CONNECT_MAX_ATTEMPTS
+                    *max_retries == xai_grok_sampler::retry::DEFAULT_MAX_RETRIES
                 }),
-                "sampler Retrying events report the loopback cap: {sampler_retries:?}"
+                "sampler Retrying events report the configured 15: {sampler_retries:?}"
             );
         })
     });

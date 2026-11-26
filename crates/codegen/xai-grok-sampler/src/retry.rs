@@ -12,10 +12,6 @@ pub const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(30);
 
 pub const TRANSPORT_REBUILD_BACKOFF: Duration = Duration::from_millis(200);
 
-/// Attempt cap for a connect failure to a loopback host. A local server (mlx serve) that is gone
-/// does not come back on the same ephemeral port, so the remote ladder (about 5.5 min) only delays the failure.
-pub const LOOPBACK_CONNECT_MAX_ATTEMPTS: u32 = 3;
-
 pub(crate) fn resolve_max_retries_with_env(
     env_override: Option<&str>,
     model_max_retries: Option<u32>,
@@ -29,6 +25,14 @@ pub(crate) fn resolve_max_retries_with_env(
 pub fn resolve_max_retries(model_max_retries: Option<u32>) -> u32 {
     let env_override = std::env::var("GROK_MAX_RETRIES").ok();
     resolve_max_retries_with_env(env_override.as_deref(), model_max_retries)
+}
+
+/// Parses `GROK_LOOPBACK_CONNECT_MAX_ATTEMPTS`, the opt-in attempt cap for a refused connect to a loopback host.
+/// A local server on a fixed port (Ollama, LM Studio) can come back on it, so unset, `0` and junk keep the full ladder.
+pub fn loopback_connect_cap(value: Option<&str>) -> Option<u32> {
+    value
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|attempts| *attempts > 0)
 }
 
 pub fn doom_loop_backoff(retry_count: u32) -> Duration {
@@ -713,8 +717,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn loopback_connect_cap_is_a_positive_attempt_count() {
+        assert_eq!(loopback_connect_cap(Some("3")), Some(3));
+        assert_eq!(loopback_connect_cap(Some("1")), Some(1));
+        for no_cap in [
+            None,
+            Some("0"),
+            Some(""),
+            Some("abc"),
+            Some("-1"),
+            Some("3.5"),
+        ] {
+            assert_eq!(loopback_connect_cap(no_cap), None, "{no_cap:?}");
+        }
+    }
+
     #[tokio::test]
-    async fn refused_loopback_connect_fails_on_the_third_attempt() {
+    async fn refused_loopback_connect_is_a_loopback_connect_error() {
         const CONNECT_GUARD: Duration = Duration::from_secs(5);
 
         let port = {
@@ -739,23 +759,6 @@ mod tests {
             StatusCode::BAD_GATEWAY,
             "upstream"
         )));
-        let cap = LOOPBACK_CONNECT_MAX_ATTEMPTS;
-        assert!(matches!(
-            classify_error(&err, 0, cap, RATE_LIMIT_RETRY_THRESHOLD),
-            RetryDecision::RetryWithClientRebuild { .. }
-        ));
-        assert!(matches!(
-            classify_error(&err, 1, cap, RATE_LIMIT_RETRY_THRESHOLD),
-            RetryDecision::Retry { .. }
-        ));
-        assert!(matches!(
-            classify_error(&err, 2, cap, RATE_LIMIT_RETRY_THRESHOLD),
-            RetryDecision::Fatal(_)
-        ));
-        assert!(matches!(
-            classify_error(&err, 2, DEFAULT_MAX_RETRIES, RATE_LIMIT_RETRY_THRESHOLD),
-            RetryDecision::Retry { .. }
-        ));
     }
 
     #[tokio::test]
