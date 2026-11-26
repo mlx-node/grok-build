@@ -1434,27 +1434,36 @@ mod tests {
 
     const COLLISION_LOG: &str = "plugin name collision resolved by scope precedence";
 
+    #[derive(Default)]
+    struct EventFields {
+        message: String,
+        plugin_name: String,
+    }
+
+    impl tracing::field::Visit for EventFields {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            match field.name() {
+                "message" => self.message = format!("{value:?}"),
+                "plugin_name" => self.plugin_name = format!("{value:?}"),
+                _ => {}
+            }
+        }
+    }
+
+    // Discovery also loads the real install registry (step 5b), so count only the fixture plugin's collisions.
     #[derive(Clone, Default)]
-    struct EventLog(std::sync::Arc<std::sync::Mutex<Vec<(tracing::Level, String)>>>);
+    struct EventLog(std::sync::Arc<std::sync::Mutex<Vec<(tracing::Level, EventFields)>>>);
 
     impl EventLog {
-        fn count(&self, level: tracing::Level, message: &str) -> usize {
+        fn collisions(&self, level: tracing::Level, plugin_name: &str) -> usize {
             self.0
                 .lock()
                 .unwrap()
                 .iter()
-                .filter(|(l, m)| *l == level && m == message)
+                .filter(|(l, f)| {
+                    *l == level && f.message == COLLISION_LOG && f.plugin_name == plugin_name
+                })
                 .count()
-        }
-    }
-
-    struct MessageVisitor<'a>(&'a mut String);
-
-    impl tracing::field::Visit for MessageVisitor<'_> {
-        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-            if field.name() == "message" {
-                *self.0 = format!("{value:?}");
-            }
         }
     }
 
@@ -1468,12 +1477,12 @@ mod tests {
         fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
         fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
         fn event(&self, event: &tracing::Event<'_>) {
-            let mut message = String::new();
-            event.record(&mut MessageVisitor(&mut message));
+            let mut fields = EventFields::default();
+            event.record(&mut fields);
             self.0
                 .lock()
                 .unwrap()
-                .push((*event.metadata().level(), message));
+                .push((*event.metadata().level(), fields));
         }
         fn enter(&self, _: &tracing::span::Id) {}
         fn exit(&self, _: &tracing::span::Id) {}
@@ -1519,8 +1528,8 @@ mod tests {
         };
         assert_eq!(winner.scope, PluginScope::CliOverride);
         assert!(winner.conflict.is_some());
-        assert_eq!(log.count(tracing::Level::WARN, COLLISION_LOG), 0);
-        assert_eq!(log.count(tracing::Level::DEBUG, COLLISION_LOG), 1);
+        assert_eq!(log.collisions(tracing::Level::WARN, "my-plugin"), 0);
+        assert_eq!(log.collisions(tracing::Level::DEBUG, "my-plugin"), 1);
     }
 
     /// Claude Code keeps each enabled plugin twice, both User scope: the marketplace clone (step 5a) and the
@@ -1584,8 +1593,8 @@ mod tests {
         };
         assert_eq!(winner.scope, PluginScope::User);
         assert!(winner.conflict.is_some());
-        assert_eq!(log.count(tracing::Level::WARN, COLLISION_LOG), 0);
-        assert_eq!(log.count(tracing::Level::DEBUG, COLLISION_LOG), 1);
+        assert_eq!(log.collisions(tracing::Level::WARN, &name), 0);
+        assert_eq!(log.collisions(tracing::Level::DEBUG, &name), 1);
     }
 
     #[test]
