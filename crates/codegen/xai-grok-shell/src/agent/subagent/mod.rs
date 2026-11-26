@@ -2073,6 +2073,7 @@ pub(crate) fn spawn_progress_publisher(
                 context_usage_pct: signals.context_window_usage,
                 tools_used: signals.tools_used,
                 error_count: signals.error_count,
+                tool_failure_count: signals.tool_failure_count,
             };
             let notification = SessionNotification {
                 session_id: acp::SessionId::new(parent_session_id.clone()),

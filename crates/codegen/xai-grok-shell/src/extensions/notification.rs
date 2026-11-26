@@ -821,6 +821,8 @@ pub enum SessionUpdate {
         tools_used: Vec<String>,
         /// Number of errors encountered so far.
         error_count: u32,
+        /// Failed tool calls so far; each is also in error_count.
+        tool_failure_count: u32,
     },
     /// A subagent session has finished (success, failure, or cancellation).
     ///
@@ -1700,6 +1702,7 @@ mod tests {
             context_usage_pct: 35,
             tools_used: vec!["bash".into(), "grep".into()],
             error_count: 1,
+            tool_failure_count: 1,
         };
         let json = serde_json::to_value(&update).unwrap();
         assert_eq!(
@@ -1730,6 +1733,7 @@ mod tests {
             Some(&serde_json::json!(["bash", "grep"]))
         );
         assert_eq!(json.get("error_count"), Some(&serde_json::json!(1)));
+        assert_eq!(json.get("tool_failure_count"), Some(&serde_json::json!(1)));
     }
 
     #[test]
@@ -1747,6 +1751,7 @@ mod tests {
             context_usage_pct: 1,
             tools_used: vec![],
             error_count: 0,
+            tool_failure_count: 0,
         };
         let json_str = serde_json::to_string(&update).unwrap();
         let parsed: SessionUpdate = serde_json::from_str(&json_str).unwrap();
@@ -1789,6 +1794,7 @@ mod tests {
             context_usage_pct: 0,
             tools_used: vec![],
             error_count: 0,
+            tool_failure_count: 0,
         })
         .unwrap();
         let finished = serde_json::to_value(SessionUpdate::SubagentFinished {

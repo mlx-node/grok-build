@@ -1510,6 +1510,7 @@ pub(super) fn test_subagent_progress(
         context_usage_pct: 0,
         tools_used: vec![],
         error_count: 0,
+        tool_failure_count: 0,
     }
 }
 /// Snapshot of subagent state after SubagentSpawned for method-parity tests.
