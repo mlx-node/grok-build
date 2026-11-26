@@ -2440,6 +2440,7 @@ fn cancelled_orphan_finish(
         turns: 0,
         duration_ms,
         tokens_used: 0,
+        total_tokens_used: 0,
         output: None,
         will_wake: false,
     }
@@ -2550,6 +2551,7 @@ fn completed_finish_from_inspection(
         turns,
         duration_ms: inspection.snapshot.duration_ms,
         tokens_used: 0,
+        total_tokens_used: 0,
         output: None,
         will_wake: false,
     })
@@ -2658,6 +2660,7 @@ pub(crate) async fn reconcile_orphaned_subagents_with_backend(
                         turns: m.turns.unwrap_or(0),
                         duration_ms: m.duration_ms.unwrap_or(0),
                         tokens_used: 0,
+                        total_tokens_used: 0,
                         output: None,
                         will_wake: false,
                     },

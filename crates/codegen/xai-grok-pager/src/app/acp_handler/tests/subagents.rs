@@ -156,6 +156,7 @@
                 turns: 3,
                 duration_ms: 9_876,
                 tokens_used: 543,
+                total_tokens_used: 0,
                 output: None,
                 will_wake: false,
             },

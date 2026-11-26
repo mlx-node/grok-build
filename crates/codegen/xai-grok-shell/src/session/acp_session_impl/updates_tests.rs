@@ -57,6 +57,7 @@ fn finished_for(
         turns: 1,
         duration_ms: 1,
         tokens_used,
+        total_tokens_used: 0,
         output: output.map(str::to_owned),
         will_wake: false,
     }

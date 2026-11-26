@@ -1441,3 +1441,137 @@ async fn resumed_child_reports_only_its_own_counts() {
         })
         .await;
 }
+
+/// A reads a file and answers (two model calls); B resumes A and does the same.
+/// Mutations that turn it red: bill the context size (A: the last call only), read the child's usage.json,
+/// which a resume copies (B: A's calls too), and send the billed sum as tokens_used.
+#[tokio::test(flavor = "current_thread")]
+async fn finish_line_bills_one_attempt() {
+    use xai_grok_test_support::{Conversation, MockToolCall, Tool, UsageReport};
+    use xai_grok_tools::implementations::grok_build::task::backend::{
+        ChannelBackend, SubagentBackend,
+    };
+    use xai_grok_tools::implementations::grok_build::task::coordinator::{
+        CoordinatorConfig, SubagentCoordinator,
+    };
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let workdir = tempfile::TempDir::new().expect("workdir");
+            let notes = workdir.path().join("notes.txt");
+            std::fs::write(&notes, "probe notes\n").expect("notes");
+            let read_notes = || {
+                MockToolCall::new(
+                    Tool::Read,
+                    serde_json::json!({ "target_file": notes.to_string_lossy() }),
+                )
+            };
+            let answer = |prompt_tokens, completion_tokens| UsageReport {
+                prompt_tokens,
+                completion_tokens,
+                cost_usd_ticks: None,
+            };
+            let server = xai_grok_test_support::MockInferenceServer::start()
+                .await
+                .expect("mock server");
+            server.set_conversations([
+                Conversation::nth(1)
+                    .calls([read_notes()])
+                    .usage(answer(1000, 7))
+                    .reply("A done"),
+                Conversation::nth(2)
+                    .calls([read_notes()])
+                    .usage(answer(2000, 9))
+                    .reply("B done"),
+            ]);
+            let tool_call_tokens = 10 + 5;
+            let (parent_cmd_tx, parent_cmd_rx) = mpsc::unbounded_channel();
+            let usage_ack = tokio::task::spawn_local(acknowledge_parent_usage(parent_cmd_rx));
+            let metas: Vec<tempfile::TempDir> = (0..2)
+                .map(|_| tempfile::TempDir::new().expect("meta dir"))
+                .collect();
+            let contexts: Vec<SubagentSpawnContext> = metas
+                .iter()
+                .map(|meta| {
+                    let mut ctx = ctx_with_toggle(HashMap::new());
+                    configure_completion_harness(
+                        &mut ctx,
+                        &server,
+                        RunShellChildHarnessConfig::new(
+                            meta.path().to_path_buf(),
+                            InitialAttemptBehavior::Normal,
+                        ),
+                    );
+                    ctx.parent_cwd = workdir.path().to_path_buf();
+                    ctx.parent_cmd_tx = Some(parent_cmd_tx.clone());
+                    ctx
+                })
+                .collect();
+            drop(parent_cmd_tx);
+            let (gateway, mut gateway_rx) = test_gateway_with_receiver();
+            let (command_tx, command_rx) =
+                SubagentCoordinator::<RunShellChildTestRunner>::channel();
+            let coordinator = tokio::task::spawn_local(
+                SubagentCoordinator::from_channel(
+                    command_rx,
+                    RunShellChildTestRunner::new(contexts, false, gateway),
+                    CoordinatorConfig::default(),
+                )
+                .run(),
+            );
+            let backend = ChannelBackend::for_coordinator_session(command_tx, "setup-parent");
+            let request = |id: &str, prompt: &str, resume_from: Option<&str>| {
+                let mut request = auto_wake_test_request(id);
+                request.prompt = prompt.to_owned();
+                request.resume_from = resume_from.map(str::to_owned);
+                request.run_in_background = false;
+                request
+            };
+            let [a_id, b_id] = [(); 2].map(|()| uuid::Uuid::now_v7().to_string());
+
+            let a = backend
+                .spawn(request(&a_id, "Read the notes file, then say done.", None), None)
+                .await
+                .expect("A spawn");
+            assert!(a.success, "A: {:?}", a.error);
+            let b = backend
+                .spawn(
+                    request(&b_id, "Read the notes again, then say done.", Some(&a_id)),
+                    None,
+                )
+                .await
+                .expect("B spawn");
+            assert!(b.success, "B: {:?}", b.error);
+            drop(backend);
+            coordinator.await.expect("coordinator");
+            usage_ack.abort();
+            assert_eq!(server.finish_scripts(), Vec::new());
+
+            let mut finished = HashMap::new();
+            while let Ok(message) = gateway_rx.try_recv() {
+                let xai_acp_lib::AcpClientMessage::ExtNotification(args) = message else {
+                    continue;
+                };
+                let Ok(notification) =
+                    serde_json::from_str::<SessionNotification>(args.request.params.get())
+                else {
+                    continue;
+                };
+                if let SessionUpdate::SubagentFinished {
+                    subagent_id,
+                    tokens_used,
+                    total_tokens_used,
+                    ..
+                } = notification.update
+                {
+                    finished.insert(subagent_id, (tokens_used, total_tokens_used));
+                }
+            }
+            assert_eq!(finished[&a_id], (1007, tool_call_tokens + 1007));
+            assert_eq!(finished[&b_id], (2009, tool_call_tokens + 2009));
+            assert_eq!(
+                (a.total_tokens_used, b.total_tokens_used),
+                (tool_call_tokens + 1007, tool_call_tokens + 2009)
+            );
+        })
+        .await;
+}

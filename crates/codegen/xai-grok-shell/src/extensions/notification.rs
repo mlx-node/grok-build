@@ -845,9 +845,12 @@ pub enum SessionUpdate {
         turns: u32,
         /// Total wall-clock duration in milliseconds.
         duration_ms: u64,
-        /// Total tokens consumed by the subagent's context window.
+        /// Context size at the end of this attempt.
         #[serde(default)]
         tokens_used: u64,
+        /// Input plus output tokens of this attempt's model calls; the roster sums it over attempts.
+        #[serde(default)]
+        total_tokens_used: u64,
         /// Final output text from the subagent (if completed).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<String>,
@@ -1807,6 +1810,7 @@ mod tests {
             turns: 1,
             duration_ms: 200,
             tokens_used: 50_000,
+            total_tokens_used: 0,
             output: None,
             will_wake: false,
         })
@@ -1910,11 +1914,13 @@ mod tests {
             SessionUpdate::SubagentFinished {
                 subagent_id,
                 tokens_used,
+                total_tokens_used,
                 output,
                 ..
             } => {
                 assert_eq!(subagent_id, "sa-old");
                 assert_eq!(tokens_used, 0, "missing field must default to 0");
+                assert_eq!(total_tokens_used, 0, "missing field must default to 0");
                 assert_eq!(output, None);
             }
             other => panic!("expected SubagentFinished, got {other:?}"),
@@ -1933,6 +1939,7 @@ mod tests {
             turns: 2,
             duration_ms: 10_000,
             tokens_used: 75_000,
+            total_tokens_used: 120_000,
             output: Some("done".into()),
             will_wake: false,
         };
@@ -1942,6 +1949,10 @@ mod tests {
 
         let json = serde_json::to_value(&update).unwrap();
         assert_eq!(json.get("tokens_used"), Some(&serde_json::json!(75_000)));
+        assert_eq!(
+            json.get("total_tokens_used"),
+            Some(&serde_json::json!(120_000))
+        );
     }
 
     #[test]

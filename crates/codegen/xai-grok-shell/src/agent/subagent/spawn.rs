@@ -413,6 +413,7 @@ pub(crate) fn present_child_completion(
                 turns: result.turns,
                 duration_ms: result.duration_ms,
                 tokens_used: completion_data.telemetry_tokens(),
+                total_tokens_used: result.total_tokens_used,
                 output: result.success.then(|| result.output.to_string()),
                 will_wake,
             },

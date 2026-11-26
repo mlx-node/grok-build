@@ -636,6 +636,7 @@ async fn test_subagent_notifications_round_trip() {
             turns: 2,
             duration_ms: 12345,
             tokens_used: 0,
+            total_tokens_used: 0,
             output: None,
             will_wake: false,
         },

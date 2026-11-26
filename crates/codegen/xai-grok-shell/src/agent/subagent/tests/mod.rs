@@ -627,6 +627,7 @@ async fn emit_subagent_notification_stamps_one_event_id_on_both_paths() {
             turns: 0,
             duration_ms: 5,
             tokens_used: 0,
+            total_tokens_used: 0,
             output: None,
             will_wake: false,
         },

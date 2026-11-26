@@ -1489,6 +1489,7 @@ pub(super) fn test_subagent_finished_for_attempt(
         turns: 1,
         duration_ms: 500,
         tokens_used: 0,
+        total_tokens_used: 0,
         output: None,
         will_wake: false,
     }
