@@ -5971,6 +5971,20 @@ fn a_cancelled_installer_retires_its_thread_when_a_reinstall_takes_the_slot() {
             crate::agent::mvp_agent::session_lifecycle::CloseOutcome::Closed,
             agent.close_active_session(&sid).await
         );
+        // Close waits out the actor's thread only for `DRAIN_OLD_THREAD_WAIT`; under load its teardown outlasts that,
+        // and the install below would retire it beside the two threads counted later.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            agent.sweep_dead_sessions();
+            if agent.session_registry.counts().session_threads == 0 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the closed session's thread must exit"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
         crate::session::persistence::STAMPS_SERVED.set(0);
         let (_installer_attach, installer_waiter) = agent.session_registry.begin_attach(&sid);
         let (handle, _cmd_tx, mut cmd_rx) = make_live_session_handle(&sid, None);
