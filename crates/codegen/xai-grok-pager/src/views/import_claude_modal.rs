@@ -1,7 +1,7 @@
 //! Interactive modal for selectively importing Claude settings.
 //!
 //! Shown when the user runs `/import-claude` (in-session) or presses `i` on the welcome screen with new Claude settings detected.
-//! Users review each discovered item, toggle which to import, and confirm. Only checked items are written to `.grok/config.toml`.
+//! Users review each discovered item, toggle which to import, and confirm. Only checked items are written to the project's `.mlx-agent/config.toml` or the user config.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use std::path::PathBuf;
 use xai_grok_external_agent_migration::{
-    ImportPlan, ImportRuleAction, ImportableItem, PathKind, find_project_root,
+    ImportPlan, ImportRuleAction, ImportableItem, PathKind, project_import_dir,
 };
 
 use crate::theme::Theme;
@@ -730,10 +730,15 @@ fn build_rows(
     if !plan.project_items.is_empty() {
         let scope_start = flat_index;
         let scope_key = format!("scope:{:?}", Scope::Project);
-        let project_config = find_project_root(cwd)
-            .join(".grok")
-            .join(xai_grok_config::USER_CONFIG_FILENAME);
-        let label = format!("Project  {}", project_config.display());
+        let label = project_import_dir(cwd).map_or_else(
+            || "Project  (no project folder in the home folder)".to_owned(),
+            |dir| {
+                format!(
+                    "Project  {}",
+                    dir.join(xai_grok_config::USER_CONFIG_FILENAME).display()
+                )
+            },
+        );
         let scope_header_pos = rows.len();
         rows.push(Row::ScopeHeader {
             label,

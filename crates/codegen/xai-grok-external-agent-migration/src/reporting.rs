@@ -3,7 +3,7 @@ use std::path::Path;
 use super::config_values::{
     ImportPlan, ImportRuleAction, ImportableItem, PathKind, format_rule_string,
 };
-use super::scope::find_project_root;
+use super::rewrite::project_import_dir;
 
 impl ImportPlan {
     #[must_use]
@@ -18,10 +18,15 @@ impl ImportPlan {
             out.push_str(&format_item_summary(&self.global_items));
         }
         if !self.project_items.is_empty() {
-            out.push_str(&format!(
-                "\nProject ({}/.grok/config.toml):\n",
-                find_project_root(cwd).display()
-            ));
+            let target = project_import_dir(cwd).map_or_else(
+                || "no project folder in the home folder".to_owned(),
+                |dir| {
+                    dir.join(xai_grok_config::USER_CONFIG_FILENAME)
+                        .display()
+                        .to_string()
+                },
+            );
+            out.push_str(&format!("\nProject ({target}):\n"));
             out.push_str(&format_item_summary(&self.project_items));
         }
         out

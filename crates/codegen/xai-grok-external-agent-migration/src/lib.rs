@@ -14,6 +14,6 @@ pub use config_values::{
     ImportRuleAction, ImportScope, ImportTool, ImportableItem, PathKind,
 };
 pub use error::MigrationError;
-pub use rewrite::{apply_import, write_import_marker};
+pub use rewrite::{apply_import, project_import_dir, write_import_marker};
 pub use scope::find_project_root;
 pub use source_cla::scan_importable_settings;

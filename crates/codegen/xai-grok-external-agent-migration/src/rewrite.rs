@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use toml::Value as TomlValue;
 use toml::map::Map as TomlMap;
@@ -35,8 +35,41 @@ pub fn write_import_marker(grok_home: &Path) -> Result<(), MigrationError> {
     Ok(())
 }
 
+/// The project agent folder an import from `cwd` writes: the one at the project root, `None` in the home folder.
+#[must_use]
+pub fn project_import_dir(cwd: &Path) -> Option<PathBuf> {
+    xai_dirs::project_agent_dir(&find_project_root(cwd))
+}
+
 pub fn apply_import(plan: &ImportPlan, cwd: &Path) -> Result<ImportResult, MigrationError> {
+    apply_import_in(
+        plan,
+        &find_project_root(cwd),
+        xai_dirs::home_dir().as_deref(),
+        xai_dirs::resolve_grok_home().as_deref(),
+    )
+}
+
+/// # Errors
+/// A project item with no project folder fails the import before anything is written.
+fn apply_import_in(
+    plan: &ImportPlan,
+    project_root: &Path,
+    home: Option<&Path>,
+    agent_home: Option<&Path>,
+) -> Result<ImportResult, MigrationError> {
     let mut result = ImportResult::default();
+    let project_dir = if plan.project_items.is_empty() {
+        None
+    } else {
+        Some(
+            xai_dirs::project_agent_dir_in(project_root, home, agent_home).ok_or_else(|| {
+                MigrationError::NoProjectFolder {
+                    path: project_root.to_path_buf(),
+                }
+            })?,
+        )
+    };
 
     if !plan.global_items.is_empty() {
         result.global_count = apply_items_to_grok_dir(
@@ -47,10 +80,11 @@ pub fn apply_import(plan: &ImportPlan, cwd: &Path) -> Result<ImportResult, Migra
         )?;
     }
 
-    if !plan.project_items.is_empty() {
-        let project_grok_dir = find_project_root(cwd).join(".grok");
+    if let Some(project_dir) = project_dir {
+        xai_dirs::ensure_project_agent_dir_in(project_root, home, agent_home)
+            .map_err(|source| MigrationError::io("create directory", &project_dir, source))?;
         result.project_count = apply_items_to_grok_dir(
-            &project_grok_dir,
+            &project_dir,
             &plan.project_items,
             ImportScope::Project,
             &mut result.modified_files,
