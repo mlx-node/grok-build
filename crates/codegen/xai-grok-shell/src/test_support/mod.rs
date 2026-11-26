@@ -26,6 +26,21 @@ fn redirect_unified_log_for_tests() {
     xai_grok_active_sessions::redirect_to_temp_for_tests();
 }
 
+/// Test threads get the session thread's stack: a debug-build turn needs 3-4 MiB, libtest's threads get std's 2 MiB.
+/// std reads `RUST_MIN_STACK` once, at the first thread spawned without a size, so this runs pre-main.
+#[ctor::ctor]
+fn session_sized_test_thread_stacks() {
+    if std::env::var_os("RUST_MIN_STACK").is_none() {
+        // SAFETY: pre-main, before libtest or any test can start a thread, and the other ctor here starts none.
+        unsafe {
+            std::env::set_var(
+                "RUST_MIN_STACK",
+                crate::session::acp_session::SESSION_THREAD_STACK_SIZE.to_string(),
+            );
+        }
+    }
+}
+
 /// Prepend the hermetic git binary (via `GIT_BIN_PATH`) to `PATH`.
 /// `Command::new("git")` in test helpers then resolves to the Bazel-provided static binary instead of system-installed git.
 /// Safe to call multiple times; only the first call mutates `PATH`.
