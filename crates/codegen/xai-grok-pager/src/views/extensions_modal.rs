@@ -2477,7 +2477,7 @@ pub fn derive_source_label(source_dir: &str) -> (String, bool) {
 fn classify_hook_source(source_dir: &str) -> HookSourceMeta {
     let grok = xai_grok_config::grok_home();
     let source_path = std::path::Path::new(source_dir);
-    // Plugin / installed-plugin dirs, under the user grok home (GROK_HOME-aware) or a project-scoped `{cwd}/.grok/<subdir>/`
+    // Plugin / installed-plugin dirs, under the user grok home (GROK_HOME-aware) or a project-scoped `{cwd}/.mlx-agent/<subdir>/`
     // Returns the first path component after the subdir (the plugin's install directory name)
     let plugin_name = |subdir: &str| -> Option<String> {
         let first_comp = |p: &std::path::Path| {
@@ -2492,7 +2492,7 @@ fn classify_hook_source(source_dir: &str) -> HookSourceMeta {
         {
             return Some(name);
         }
-        // Project-scoped `.grok/<subdir>/<name>` anywhere in the path.
+        // Project-scoped `.mlx-agent/<subdir>/<name>` anywhere in the path.
         // Component-based so it works regardless of path separator.
         let comps: Vec<_> = source_path
             .components()
@@ -2502,7 +2502,7 @@ fn classify_hook_source(source_dir: &str) -> HookSourceMeta {
             let [a, b, c] = w else {
                 return None;
             };
-            (a == ".grok" && b == subdir && !c.is_empty()).then(|| c.clone())
+            (a == xai_dirs::AGENT_DIR_NAME && b == subdir && !c.is_empty()).then(|| c.clone())
         })
     };
     if let Some(name) = plugin_name("plugins").or_else(|| plugin_name("installed-plugins")) {
@@ -2528,7 +2528,8 @@ fn classify_hook_source(source_dir: &str) -> HookSourceMeta {
         };
     }
     // Project hooks
-    if source_dir.ends_with("/.grok/hooks") || source_dir.contains("/.grok/hooks/") {
+    let project_hooks = format!("/{}/hooks", xai_dirs::AGENT_DIR_NAME);
+    if source_dir.ends_with(&project_hooks) || source_dir.contains(&format!("{project_hooks}/")) {
         return HookSourceMeta {
             label: "Project hooks".into(),
             kind: HookSourceKind::Project,
@@ -2659,8 +2660,8 @@ fn skill_source_str(skill: &SkillInfo) -> String {
             }
             xai_grok_tools::types::config_source::ConfigSource::Project { path } => {
                 let s = path.display().to_string();
-                if s.contains("/.grok/") {
-                    ".grok/skills".into()
+                if s.contains(&format!("/{}/", xai_dirs::AGENT_DIR_NAME)) {
+                    format!("{}/skills", xai_dirs::AGENT_DIR_NAME)
                 } else if s.contains("/.claude/") {
                     ".claude/skills".into()
                 } else {
@@ -4302,14 +4303,15 @@ mod tests {
 
     #[test]
     fn derive_source_label_detects_project_scoped_plugins() {
-        // Regression: project-scoped `{cwd}/.grok/plugins/<name>/` must label as a (non-removable) plugin, not a removable "Custom" source
+        // Regression: project-scoped `{cwd}/.mlx-agent/plugins/<name>/` must label as a (non-removable) plugin, not a removable "Custom" source
         // The user grok-home branch is GROK_HOME-aware; this covers the project fallback
-        let (label, is_custom) = derive_source_label("/repo/work/.grok/plugins/my-plugin/hooks");
+        let (label, is_custom) =
+            derive_source_label("/repo/work/.mlx-agent/plugins/my-plugin/hooks");
         assert_eq!(label, "Plugin: my-plugin");
         assert!(!is_custom);
 
         let (label, is_custom) =
-            derive_source_label("/repo/work/.grok/installed-plugins/vendor-abc123/skills");
+            derive_source_label("/repo/work/.mlx-agent/installed-plugins/vendor-abc123/skills");
         assert_eq!(label, "Plugin: vendor-abc123");
         assert!(!is_custom);
     }
@@ -8012,7 +8014,7 @@ mod tests {
         let hooks = vec![
             make_hook("c", "/zzz/custom", false),
             h_stop,
-            make_hook("a", "/repo/.grok/hooks", false),
+            make_hook("a", "/repo/.mlx-agent/hooks", false),
             h_pre,
             h_notify,
             make_hook("b", "/aaa/custom", false),
@@ -8023,7 +8025,7 @@ mod tests {
         assert_eq!(
             dirs,
             [
-                "/repo/.grok/hooks",
+                "/repo/.mlx-agent/hooks",
                 "/aaa/custom",
                 "/tmp/hooks-src",
                 "/zzz/custom"

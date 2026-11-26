@@ -2,7 +2,7 @@
 //!
 //! Discovers plugins from multiple sources in priority order:
 //! 1. CLI `--plugin-dir` paths (scope: `CliOverride`)
-//! 2. `.grok/plugins/*/` (scope: `Project`, walked from cwd to worktree root)
+//! 2. `.mlx-agent/plugins/*/` (scope: `Project`, walked from cwd to worktree root)
 //! 3. `.claude/plugins/*/` (scope: `Project`, compat)
 //! 4. `~/.grok/plugins/*/` (scope: `User`)
 //! 5. `~/.claude/plugins/*/` (scope: `User`, compat)
@@ -27,7 +27,7 @@ use super::trust::TrustStore;
 pub enum PluginScope {
     /// `--plugin-dir` (highest priority, always trusted)
     CliOverride = 0,
-    /// `.grok/plugins/` or `.claude/plugins/` in project (requires trust)
+    /// `.mlx-agent/plugins/` or `.claude/plugins/` in project (requires trust)
     Project = 1,
     /// `~/.grok/plugins/` or `~/.claude/plugins/` (always trusted)
     User = 2,
@@ -76,7 +76,7 @@ impl std::fmt::Display for PluginScope {
 pub enum PluginOrigin {
     /// CLI `--plugin-dir`.
     CliOverride,
-    /// Project `.grok/plugins/`.
+    /// Project `.mlx-agent/plugins/`.
     ProjectGrok,
     /// Project `.claude/plugins/`.
     ProjectClaude,
@@ -235,7 +235,7 @@ fn user_plugin_dirs(home: Option<&Path>, grok: Option<&Path>) -> Vec<(PathBuf, P
     dirs
 }
 
-/// Origin for a project plugins parent dir: `.claude/plugins` vs `.grok/plugins`.
+/// Origin for a project plugins parent dir: `.claude/plugins` vs `.mlx-agent/plugins`.
 fn project_plugins_dir_origin(plugins_dir: &Path) -> PluginOrigin {
     let is_claude = plugins_dir
         .parent()
@@ -259,10 +259,10 @@ pub fn project_plugin_dirs(cwd: Option<&Path>) -> (Vec<PathBuf>, Option<PathBuf>
     (project_plugin_dirs_in(&chain.dirs), chain.git_root)
 }
 
-/// Existing project plugin parent dirs (`.grok/plugins`, `.claude/plugins`) under each dir of a precomputed [`crate::repo::RepoDirChain`].
+/// Existing project plugin parent dirs (`.mlx-agent/plugins`, `.claude/plugins`) under each dir of a precomputed [`crate::repo::RepoDirChain`].
 /// The folder-trust gate reuses its one shared chain here so detection and discovery can never drift.
 pub fn project_plugin_dirs_in(chain_dirs: &[PathBuf]) -> Vec<PathBuf> {
-    crate::repo::existing_subdirs_along(chain_dirs, &[".grok/plugins", ".claude/plugins"])
+    crate::repo::existing_subdirs_along(chain_dirs, "plugins", &[".claude/plugins"])
 }
 
 /// `cwd` is used to find the git worktree root for project-scope plugins.
@@ -314,7 +314,7 @@ fn discover_plugins_with_home(
         }
     }
 
-    // 2-3. Project plugins (.grok/plugins/, .claude/plugins/).
+    // 2-3. Project plugins (.mlx-agent/plugins/, .claude/plugins/).
     // Scan the same dirs the folder-trust gate detects, via the shared `project_plugin_dirs` walk, so discovery and gating can never drift
     if let Some(cwd) = cwd {
         let (project_dirs, git_root) = project_plugin_dirs(Some(cwd));
@@ -356,7 +356,7 @@ fn discover_plugins_with_home(
     }
 
     // 4-5. User plugins: $GROK_HOME/plugins, legacy ~/.grok/plugins, ~/.claude/plugins.
-    // Gate the grok plugins dir on user_grok_home() so a project's .grok/plugins is never scanned as user-global when no home resolves
+    // Gate the grok plugins dir on user_grok_home() so a project's .mlx-agent/plugins is never scanned as user-global when no home resolves
     for (plugins_dir, origin) in user_plugin_dirs(home, grok_home) {
         if !config.claude_plugins && origin == PluginOrigin::UserClaude {
             continue;
@@ -1745,11 +1745,15 @@ mod tests {
 
     #[test]
     fn discover_real_project_plugin_gated_on_project_trusted() {
-        // Drives discover_plugins end to end with a repo-local `.grok/plugins/<x>/` plugin that has an MCP component
+        // Drives discover_plugins end to end with a repo-local `.mlx-agent/plugins/<x>/` plugin that has an MCP component
         // The plugin is trusted iff the folder-trust verdict (project_trusted) allows it
         // The plugin is found by name so any user-scoped plugins on the test host are irrelevant
         let tmp = tempfile::tempdir().unwrap();
-        let plugin_dir = tmp.path().join(".grok").join("plugins").join("proj-mcp");
+        let plugin_dir = tmp
+            .path()
+            .join(".mlx-agent")
+            .join("plugins")
+            .join("proj-mcp");
         std::fs::create_dir_all(&plugin_dir).unwrap();
         std::fs::write(plugin_dir.join("plugin.json"), r#"{"name": "proj-mcp"}"#).unwrap();
         std::fs::write(plugin_dir.join(".mcp.json"), r#"{"mcpServers":{}}"#).unwrap();
@@ -1811,7 +1815,7 @@ mod tests {
         std::fs::create_dir_all(&project).unwrap();
         git2::Repository::init(&project).unwrap();
 
-        make_manifest_plugin(&project.join(".grok/plugins"), &name("project-grok"));
+        make_manifest_plugin(&project.join(".mlx-agent/plugins"), &name("project-grok"));
         make_manifest_plugin(&project.join(".claude/plugins"), &name("project-claude"));
         make_manifest_plugin(&project.join("mp/plugins"), &name("project-marketplace"));
         std::fs::write(

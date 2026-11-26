@@ -45,7 +45,7 @@ fn resolve_standalone_memory_mode(
     MemoryConfig::resolve(false, false, config, remote).mode
 }
 /// Configuration for subagent (task tool) support.
-/// Parsed from the `[subagents]` section of `~/.grok/config.toml` or `.grok/config.toml`.
+/// Parsed from the `[subagents]` section of `~/.grok/config.toml` or `.mlx-agent/config.toml`.
 /// Enabled by default; can be disabled via the `GROK_SUBAGENTS=0` env var or `[subagents] enabled = false` in config.toml.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
@@ -202,11 +202,12 @@ impl SubagentsConfig {
     pub fn get_persona(&self, name: &str) -> Option<&SubagentPersona> {
         self.personas.get(name)
     }
-    /// Discover personas from `.grok/personas/` directory. File-based personas are loaded from `{cwd}/.grok/personas/*.toml`. Each file defines a single `SubagentPersona`. The file stem becomes the persona name.
+    /// Discover personas from `.mlx-agent/personas/` directory. File-based personas are loaded from `{cwd}/.mlx-agent/personas/*.toml`. Each file defines a single `SubagentPersona`. The file stem becomes the persona name.
     /// Inline config takes precedence.
     pub(crate) fn discover_personas(&mut self, cwd: &std::path::Path) {
-        let dir = cwd.join(".grok").join("personas");
-        self.discover_personas_in_dir(&dir);
+        if let Some(folder) = xai_dirs::project_agent_dir(cwd) {
+            self.discover_personas_in_dir(&folder.join("personas"));
+        }
     }
     /// Validate all role definitions. Returns a list of (role_name, error_message) for invalid entries.
     pub fn validate_roles(&self) -> Vec<(String, String)> {
@@ -239,11 +240,12 @@ impl SubagentsConfig {
         }
         errors
     }
-    /// Discover roles from `.grok/roles/` directory and merge with inline config. File-based roles are loaded from `{cwd}/.grok/roles/*.toml`.
+    /// Discover roles from `.mlx-agent/roles/` directory and merge with inline config. File-based roles are loaded from `{cwd}/.mlx-agent/roles/*.toml`.
     /// Each file defines a single `SubagentRole` (same schema as inline `[subagents.roles.*]`). The file stem becomes the role name. Precedence: inline config roles override file-based roles with the same name.
     pub(crate) fn discover_roles(&mut self, cwd: &std::path::Path) {
-        let roles_dir = cwd.join(".grok").join("roles");
-        self.discover_roles_in_dir(&roles_dir);
+        if let Some(folder) = xai_dirs::project_agent_dir(cwd) {
+            self.discover_roles_in_dir(&folder.join("roles"));
+        }
     }
     pub const ENV_MAX_DEPTH: &'static str = "GROK_SUBAGENTS_MAX_DEPTH";
     pub const DEFAULT_MAX_DEPTH: u32 = 1;

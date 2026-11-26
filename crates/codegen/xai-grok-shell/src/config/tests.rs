@@ -2524,7 +2524,7 @@ fn validate_roles_accepts_valid_prompt_file() {
 #[test]
 fn discover_roles_loads_from_directory() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let roles_dir = tmp.path().join(".grok").join("roles");
+    let roles_dir = tmp.path().join(".mlx-agent").join("roles");
     std::fs::create_dir_all(&roles_dir).unwrap();
     std::fs::write(
             roles_dir.join("reviewer.toml"),
@@ -2543,7 +2543,7 @@ fn discover_roles_loads_from_directory() {
 #[test]
 fn discover_roles_inline_takes_precedence() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let roles_dir = tmp.path().join(".grok").join("roles");
+    let roles_dir = tmp.path().join(".mlx-agent").join("roles");
     std::fs::create_dir_all(&roles_dir).unwrap();
     std::fs::write(
             roles_dir.join("researcher.toml"),
@@ -2567,7 +2567,7 @@ fn discover_roles_inline_takes_precedence() {
 #[test]
 fn discover_roles_ignores_non_toml_files() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let roles_dir = tmp.path().join(".grok").join("roles");
+    let roles_dir = tmp.path().join(".mlx-agent").join("roles");
     std::fs::create_dir_all(&roles_dir).unwrap();
     std::fs::write(roles_dir.join("readme.md"), "This is not a role definition")
         .unwrap();
@@ -2620,7 +2620,7 @@ fn persona_lookup_returns_none_for_unknown() {
 #[test]
 fn discover_personas_loads_from_directory() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let dir = tmp.path().join(".grok").join("personas");
+    let dir = tmp.path().join(".mlx-agent").join("personas");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
             dir.join("friendly.toml"),
@@ -2635,7 +2635,7 @@ fn discover_personas_loads_from_directory() {
 #[test]
 fn discover_personas_inline_takes_precedence() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let dir = tmp.path().join(".grok").join("personas");
+    let dir = tmp.path().join(".mlx-agent").join("personas");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("strict.toml"), r#"instructions = "File-based strict""#)
         .unwrap();
@@ -2651,6 +2651,28 @@ fn discover_personas_inline_takes_precedence() {
             cfg.get_persona("strict").unwrap().instructions.as_deref(),
             Some("Inline strict"),
         );
+}
+#[test]
+fn discover_roles_and_personas_read_only_the_agent_folder() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    for (dir, name) in [(".grok", "grokmark"), (".mlx-agent", "mlxmark")] {
+        for kind in ["roles", "personas"] {
+            let folder = tmp.path().join(dir).join(kind);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(
+                folder.join(format!("{name}.toml")),
+                "description = \"d\"\ninstructions = \"i\"\n",
+            )
+            .unwrap();
+        }
+    }
+    let mut cfg: SubagentsConfig = toml::from_str("").unwrap();
+    cfg.discover_roles(tmp.path());
+    cfg.discover_personas(tmp.path());
+    assert!(cfg.get_role("mlxmark").is_some());
+    assert!(cfg.get_persona("mlxmark").is_some());
+    assert!(cfg.get_role("grokmark").is_none());
+    assert!(cfg.get_persona("grokmark").is_none());
 }
 fn write_subagent_definitions(root: &std::path::Path, definitions: &[(&str, &str)]) {
     let roles = root.join("roles");
@@ -2677,7 +2699,7 @@ fn project_overlay_preserves_source_precedence() {
     let home = tmp.path().join("home");
     let bundled = tmp.path().join("bundled");
     write_subagent_definitions(
-        &project.join(".grok"),
+        &project.join(".mlx-agent"),
         &[
             ("shadowed", "Project"),
             ("bundled-shadowed", "Project"),
@@ -2686,7 +2708,7 @@ fn project_overlay_preserves_source_precedence() {
         ],
     );
     write_subagent_definitions(
-        &home.join(".grok"),
+        &home.join(".mlx-agent"),
         &[("shadowed", "User"), ("user-only", "User")],
     );
     write_subagent_definitions(
@@ -2711,7 +2733,7 @@ fn project_overlay_preserves_source_precedence() {
     let base = SubagentsConfig::resolve_base_with_sources(
         None,
         &config,
-        Some(&home.join(".grok")),
+        Some(&home.join(".mlx-agent")),
         &bundled,
     );
     let resolve = |project_trusted| {
@@ -2798,8 +2820,8 @@ fn bundled_personas_and_roles_have_lowest_priority_in_resolve_order() {
     let home = tmp.path().join("home");
     let workspace = tmp.path().join("workspace");
     let bundled = home.join(".grok").join("bundled");
-    std::fs::create_dir_all(workspace.join(".grok").join("roles")).unwrap();
-    std::fs::create_dir_all(workspace.join(".grok").join("personas")).unwrap();
+    std::fs::create_dir_all(workspace.join(".mlx-agent").join("roles")).unwrap();
+    std::fs::create_dir_all(workspace.join(".mlx-agent").join("personas")).unwrap();
     std::fs::create_dir_all(home.join(".grok").join("roles")).unwrap();
     std::fs::create_dir_all(home.join(".grok").join("personas")).unwrap();
     std::fs::create_dir_all(bundled.join("roles")).unwrap();
@@ -2825,12 +2847,12 @@ fn bundled_personas_and_roles_have_lowest_priority_in_resolve_order() {
         )
         .unwrap();
     std::fs::write(
-            workspace.join(".grok/roles/reviewer.toml"),
+            workspace.join(".mlx-agent/roles/reviewer.toml"),
             r#"description = "Project reviewer""#,
         )
         .unwrap();
     std::fs::write(
-            workspace.join(".grok/personas/reviewer.toml"),
+            workspace.join(".mlx-agent/personas/reviewer.toml"),
             r#"instructions = "Project persona""#,
         )
         .unwrap();
@@ -2878,8 +2900,8 @@ fn bundled_personas_and_roles_have_lowest_priority_in_resolve_order() {
                 .as_deref(),
             Some("Inline persona")
         );
-    std::fs::remove_file(workspace.join(".grok/roles/reviewer.toml")).unwrap();
-    std::fs::remove_file(workspace.join(".grok/personas/reviewer.toml")).unwrap();
+    std::fs::remove_file(workspace.join(".mlx-agent/roles/reviewer.toml")).unwrap();
+    std::fs::remove_file(workspace.join(".mlx-agent/personas/reviewer.toml")).unwrap();
     let config = toml::from_str::<
         toml::Value,
     >(r#"
@@ -3146,7 +3168,7 @@ fn config_layers_user_overrides_managed() {
 }
 /// A provider in a trusted disk layer resolves through the real `ConfigLayers` and `effective_config_disk_only` parse path.
 /// The direct-TOML parse tests bypass that path.
-/// (`ConfigLayers` has no project slot, so a repo `.grok/config.toml` structurally cannot supply one.)
+/// (`ConfigLayers` has no project slot, so a repo `.mlx-agent/config.toml` structurally cannot supply one.)
 #[test]
 fn auth_provider_honored_only_from_trusted_disk_layers() {
     let layers = ConfigLayers {
@@ -3314,7 +3336,7 @@ fn session_plugins_config(
         compat_env: &xai_grok_config::compat::CompatEnv::from_process(),
     })
 }
-/// RCE guard: a project `.grok/config.toml` must never source `[feedback.user]` (its `command` runs `sh -c`).
+/// RCE guard: a project `.mlx-agent/config.toml` must never source `[feedback.user]` (its `command` runs `sh -c`).
 #[test]
 #[serial_test::serial]
 fn project_config_never_sources_feedback_user() {
@@ -3325,7 +3347,7 @@ fn project_config_never_sources_feedback_user() {
     let _sim = simulate_release_build();
     let repo = tempfile::tempdir().unwrap();
     git2::Repository::init(repo.path()).unwrap();
-    let grok = repo.path().join(".grok");
+    let grok = repo.path().join(".mlx-agent");
     std::fs::create_dir_all(&grok).unwrap();
     std::fs::write(
             grok.join("config.toml"),
@@ -4049,7 +4071,7 @@ fn project_overlay_tracks_authoritative_trust_transitions() {
     let repo = tempfile::tempdir().unwrap();
     git2::Repository::init(repo.path()).unwrap();
     write_subagent_definitions(
-        &repo.path().join(".grok"),
+        &repo.path().join(".mlx-agent"),
         &[("shared", "Project"), ("project-only", "Project")],
     );
     let mut base = SubagentsConfig::default();
@@ -4157,7 +4179,7 @@ fn discover_plugins_excludes_untrusted_configpath_plugin_end_to_end() {
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::write(plugin_dir.join("plugin.json"), r#"{"name":"cfgpath-probe"}"#)
         .unwrap();
-    let grok = cwd.join(".grok");
+    let grok = cwd.join(".mlx-agent");
     std::fs::create_dir_all(&grok).unwrap();
     std::fs::write(
             grok.join("config.toml"),
@@ -4221,7 +4243,7 @@ fn kill_switched_cold_cwd_stays_allowed_through_plugins_config_read() {
     let _sim = simulate_release_build();
     let repo = tempfile::tempdir().unwrap();
     git2::Repository::init(repo.path()).unwrap();
-    let grok = repo.path().join(".grok");
+    let grok = repo.path().join(".mlx-agent");
     std::fs::create_dir_all(&grok).unwrap();
     std::fs::write(grok.join("config.toml"), "[plugins]\npaths = [\"./proj-plugin\"]\n")
         .unwrap();

@@ -896,8 +896,9 @@ pub fn user_config_path() -> PathBuf {
     config_path()
 }
 
-pub fn project_config_path(dir: &std::path::Path) -> PathBuf {
-    dir.join(".grok").join("config.toml")
+/// `<dir>/.mlx-agent/config.toml`, or `None` where `dir` has no project agent folder (the home folder).
+pub fn project_config_path(dir: &std::path::Path) -> Option<PathBuf> {
+    xai_dirs::project_agent_dir(dir).map(|folder| folder.join("config.toml"))
 }
 
 /// Checks raw key presence rather than deserializing, so malformed entries (the ones users most need `mcp remove` for) are still reported.
@@ -1053,7 +1054,7 @@ mod tests {
         )
         .unwrap();
 
-        let grok = repo.path().join(".grok");
+        let grok = repo.path().join(".mlx-agent");
         std::fs::create_dir_all(&grok).unwrap();
         std::fs::write(
             grok.join("config.toml"),
@@ -1398,8 +1399,8 @@ enabled = false
         let tmp = tempfile::tempdir().unwrap();
         git2::Repository::init(tmp.path()).unwrap();
         let nested = tmp.path().join("pkg");
-        std::fs::create_dir_all(nested.join(".grok")).unwrap();
-        std::fs::create_dir_all(tmp.path().join(".grok")).unwrap();
+        std::fs::create_dir_all(nested.join(".mlx-agent")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent")).unwrap();
 
         let sticky = r#"
 # keep me
@@ -1407,8 +1408,8 @@ enabled = false
 command = "npx"
 enabled = false
 "#;
-        let ancestor = tmp.path().join(".grok").join("config.toml");
-        let nearer = nested.join(".grok").join("config.toml");
+        let ancestor = tmp.path().join(".mlx-agent").join("config.toml");
+        let nearer = nested.join(".mlx-agent").join("config.toml");
         std::fs::write(&ancestor, sticky).unwrap();
         std::fs::write(&nearer, sticky).unwrap();
 
@@ -1487,7 +1488,7 @@ enabled = false
     async fn project_enable_replaces_config_symlink_not_referent() {
         let tmp = tempfile::tempdir().unwrap();
         git2::Repository::init(tmp.path()).unwrap();
-        let grok = tmp.path().join(".grok");
+        let grok = tmp.path().join(".mlx-agent");
         std::fs::create_dir_all(&grok).unwrap();
         let outside = tmp.path().join("outside.toml");
         std::fs::write(

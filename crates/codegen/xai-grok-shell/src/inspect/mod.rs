@@ -551,7 +551,7 @@ fn instruction_file_type(file_path: &str, grok_home: &Path, claude_imported: boo
     if path
         .parent()
         .is_some_and(|parent| parent == grok_home.join("rules"))
-        || has_rules_directory(file_path, ".grok")
+        || has_rules_directory(file_path, xai_dirs::AGENT_DIR_NAME)
         || has_rules_directory(file_path, ".cursor")
         || (!claude_imported && has_rules_directory(file_path, ".claude"))
     {
@@ -2015,7 +2015,7 @@ mod tests {
             ("claude", "/repo/.claude/rules/team.md"),
             ("claude", r"C:\repo\.claude\rules\team.md"),
         ] {
-            let file_type = instruction_file_type(path, Path::new("/home/user/.grok"), false);
+            let file_type = instruction_file_type(path, Path::new("/home/user/.mlx-agent"), false);
             assert_eq!(file_type, "rules");
             assert_eq!(
                 instruction_compat_status(&Some(vendor.to_owned()), file_type, &report),
@@ -2023,18 +2023,30 @@ mod tests {
             );
         }
 
-        for path in ["/repo/.grok/rules/team.md", r"C:\repo\.grok\rules\team.md"] {
+        for path in [
+            "/repo/.mlx-agent/rules/team.md",
+            r"C:\repo\.mlx-agent\rules\team.md",
+        ] {
             assert_eq!(
-                instruction_file_type(path, Path::new("/home/user/.grok"), false),
+                instruction_file_type(path, Path::new("/home/user/.mlx-agent"), false),
                 "rules"
             );
         }
+        assert_eq!(
+            instruction_file_type(
+                "/repo/.grok/rules/team.md",
+                Path::new("/home/user/.mlx-agent"),
+                false
+            ),
+            "agents_md",
+            "a .grok rules file is not a rule"
+        );
         for path in [
             "/repo/.cursor/rules/team.md",
             r"C:\repo\.cursor\rules\team.md",
         ] {
             assert_eq!(
-                instruction_file_type(path, Path::new("/home/user/.grok"), true),
+                instruction_file_type(path, Path::new("/home/user/.mlx-agent"), true),
                 "rules"
             );
         }
@@ -2042,7 +2054,7 @@ mod tests {
             "/repo/.claude/rules/team.md",
             r"C:\repo\.claude\rules\team.md",
         ] {
-            let file_type = instruction_file_type(path, Path::new("/home/user/.grok"), true);
+            let file_type = instruction_file_type(path, Path::new("/home/user/.mlx-agent"), true);
             assert_eq!(file_type, "agents_md");
             assert_eq!(
                 instruction_compat_status(&Some("claude".to_owned()), file_type, &report),
@@ -2054,7 +2066,7 @@ mod tests {
             r"C:\repo\.cursor\ruleset\team.md",
         ] {
             assert_eq!(
-                instruction_file_type(path, Path::new("/home/user/.grok"), false),
+                instruction_file_type(path, Path::new("/home/user/.mlx-agent"), false),
                 "agents_md"
             );
         }

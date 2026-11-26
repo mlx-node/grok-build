@@ -48,7 +48,7 @@ pub enum McpTransport {
 pub enum McpScope {
     /// `~/.grok/config.toml`, available in all your projects
     User,
-    /// `./.grok/config.toml`, shared with everyone working in this directory
+    /// `./.mlx-agent/config.toml`, shared with everyone working in this directory
     Project,
 }
 
@@ -120,7 +120,7 @@ pub struct AddArgs {
     #[arg(short = 't', long, value_enum)]
     transport: Option<McpTransport>,
 
-    /// Config to write to: user (~/.grok/config.toml) or project (./.grok/config.toml)
+    /// Config to write to: user (~/.grok/config.toml) or project (./.mlx-agent/config.toml)
     #[arg(short = 's', long, value_enum, default_value = "user")]
     scope: McpScope,
 
@@ -522,6 +522,10 @@ fn scope_target(scope: McpScope) -> PathBuf {
         McpScope::User => xai_grok_shell::util::config::user_config_path(),
         McpScope::Project => {
             xai_grok_shell::util::config::project_config_path(&current_dir_or_exit())
+                .unwrap_or_else(|| {
+                    eprintln!("No project folder in the home folder; run this in a project.");
+                    std::process::exit(1);
+                })
         }
     }
 }
@@ -741,7 +745,7 @@ async fn run_remove(name: &str, requested_scope: Option<McpScope>) -> Result<()>
     println!("Removed MCP server '{name}' from {} config", scope.label());
     println!("File modified: {}", scope_display(scope, &path));
 
-    // A scoped delete can leave the name defined in the other scope or an ancestor .grok/config.toml, where it still resolves for sessions
+    // A scoped delete can leave the name defined in the other scope or an ancestor .mlx-agent/config.toml, where it still resolves for sessions
     let still_user_defined = mcp_server_defined_at(&user_config_path(), name);
     if let Some((survivor_scope, remaining)) =
         surviving_definition(still_user_defined, find_project_site())
@@ -1317,7 +1321,7 @@ mod tests {
 
     #[test]
     fn grok_com_known_only_with_toml_definition() {
-        // Unique name: `grok_home()` is process-wide OnceLock, so GROK_HOME. `grok_com_*` in the real ~/.grok disabled
+        // Unique name: `grok_home()` is process-wide OnceLock, so GROK_HOME. `grok_com_*` in the real ~/.mlx-agent disabled
         // list would fail an orphan assertion on a well-known name.
         let name = format!("grok_com_orphan_{}", uuid::Uuid::new_v4().as_simple());
 
@@ -1329,11 +1333,11 @@ mod tests {
         );
 
         let defined = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(defined.path().join(".grok")).unwrap();
+        std::fs::create_dir_all(defined.path().join(".mlx-agent")).unwrap();
         std::fs::write(
             defined
                 .path()
-                .join(".grok")
+                .join(".mlx-agent")
                 .join(xai_grok_config::USER_CONFIG_FILENAME),
             format!(
                 r#"

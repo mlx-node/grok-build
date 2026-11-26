@@ -161,8 +161,14 @@ pub fn is_ungrantable(root: &Path, floor: &[Protected]) -> bool {
 /// Subpaths of the workspace root that stay read-only even though the root is writable: the
 /// editors' and agents' own config trees. The git entries are derived from the repository's
 /// layout by [`git_config::git_entries_in`].
-pub const WORKSPACE_PROTECTED_SUBPATHS: &[&str] =
-    &[".grok", ".cursor", ".claude", ".vscode", ".idea"];
+pub const WORKSPACE_PROTECTED_SUBPATHS: &[&str] = &[
+    ".grok",
+    xai_dirs::AGENT_DIR_NAME,
+    ".cursor",
+    ".claude",
+    ".vscode",
+    ".idea",
+];
 
 /// The entries of a git directory that run or reconfigure code on the user's next git action:
 /// `hooks/`, `config` and `config.worktree` (`core.hooksPath`, `core.fsmonitor`, filters; the

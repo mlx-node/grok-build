@@ -854,7 +854,7 @@ fn resolve_agent_definition_agent_profile_with_model_override() {
         std::env::remove_var("GROK_AGENT");
     }
     let tmp = tempfile::tempdir().unwrap();
-    let agents_dir = tmp.path().join(".grok").join("agents");
+    let agents_dir = tmp.path().join(".mlx-agent").join("agents");
     std::fs::create_dir_all(&agents_dir).unwrap();
     std::fs::write(
             agents_dir.join("test-architect.md"),
@@ -3190,7 +3190,7 @@ async fn ensure_plugin_registry_lazily_populates_snapshot() {
 /// session-less `x.ai/plugins/list` / `x.ai/skills/list` callers until restart, while per-session
 /// registries, which read disk, were right. The shared rebuild must read disk too.
 ///
-/// Exercised through a project `.grok/config.toml` (merged by `resolve_effective_plugins_config` for
+/// Exercised through a project `.mlx-agent/config.toml` (merged by `resolve_effective_plugins_config` for
 /// the given cwd): `grok_home()` is a process-wide `OnceLock`, so the user layer cannot be isolated
 /// per test.
 #[tokio::test]
@@ -3205,7 +3205,7 @@ async fn shared_plugin_registry_snapshot_reads_plugins_config_from_disk() {
     .unwrap();
     let repo = tempfile::tempdir().unwrap();
     git2::Repository::init(repo.path()).unwrap();
-    let project_config_dir = repo.path().join(".grok");
+    let project_config_dir = repo.path().join(".mlx-agent");
     std::fs::create_dir_all(&project_config_dir).unwrap();
     let auth_home = tempfile::tempdir().unwrap();
     let auth_manager =
@@ -3311,9 +3311,9 @@ async fn plugins_reload_resolves_real_remote_trust_before_reading_disk_config() 
     git2::Repository::init(repo.path()).unwrap();
     let proj_plugin = repo.path().join("proj-plugin");
     write_plugin_manifest(&proj_plugin, "regr-killswitch-proj");
-    std::fs::create_dir_all(repo.path().join(".grok")).unwrap();
+    std::fs::create_dir_all(repo.path().join(".mlx-agent")).unwrap();
     std::fs::write(
-        repo.path().join(".grok").join("config.toml"),
+        repo.path().join(".mlx-agent").join("config.toml"),
         format!("[plugins]\npaths = ['{}']\n", proj_plugin.display()),
     )
     .unwrap();
@@ -3358,7 +3358,7 @@ async fn plugins_reload_rechecks_launch_dir_trust() {
     write_plugin_manifest(
         &repo
             .path()
-            .join(".grok")
+            .join(".mlx-agent")
             .join("plugins")
             .join("regr-late-proj"),
         "regr-late-proj",
@@ -3413,7 +3413,7 @@ async fn lazy_registry_build_resolves_real_remote_trust_before_reading_disk_conf
     write_plugin_manifest(
         &repo
             .path()
-            .join(".grok")
+            .join(".mlx-agent")
             .join("plugins")
             .join("regr-lazy-killswitch"),
         "regr-lazy-killswitch",
@@ -8162,8 +8162,8 @@ fn repo_with_project_mcp_server() -> tempfile::TempDir {
     tmp
 }
 fn write_project_subagent_definitions(cwd: &std::path::Path) {
-    let roles = cwd.join(".grok/roles");
-    let personas = cwd.join(".grok/personas");
+    let roles = cwd.join(".mlx-agent/roles");
+    let personas = cwd.join(".mlx-agent/personas");
     std::fs::create_dir_all(&roles).unwrap();
     std::fs::create_dir_all(&personas).unwrap();
     std::fs::write(roles.join("probe.toml"), "description = \"Project role\"").unwrap();
@@ -8240,7 +8240,7 @@ fn subagent_spawn_context_reloads_project_definitions_after_trust_changes() {
         assert!(!revoked.subagent_personas.contains_key("probe"));
     });
 }
-/// End-to-end gate wiring: project `.grok/roles` / `personas` alone must drive the real `resolve_and_record` untrusted.
+/// End-to-end gate wiring: project `.mlx-agent/roles` / `personas` alone must drive the real `resolve_and_record` untrusted.
 /// No forced `record_for_test` verdict.
 /// Project defs stay out of Task spawn context, then are re-admitted after grant.
 #[test]

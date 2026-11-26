@@ -28,11 +28,11 @@ pub(crate) const AGENT_FILENAMES: &[&str] = &[
     ".claude/CLAUDE.local.md",
 ];
 
-/// Subdirectories to scan for `*.md` rules files. The runtime list is produced by
-/// `CompatConfig::rules_dirs()`; this constant is retained only as the all-on reference for the
-/// pinning test.
+/// Vendor subdirectories scanned for `*.md` rules files, beside the project agent folder's `rules`.
+/// The runtime list is produced by `CompatConfig::rules_dirs()`; this constant is retained only as
+/// the all-on reference for the pinning test.
 #[cfg(test)]
-pub(crate) const RULES_DIRS: &[&str] = &[".grok/rules", ".claude/rules", ".cursor/rules"];
+pub(crate) const RULES_DIRS: &[&str] = &[".claude/rules", ".cursor/rules"];
 
 /// Maximum number of parent directories to walk upward per call. In very deep repos, this prevents doing many stat calls on a single tool
 /// invocation. Directories beyond this depth are silently skipped — they'll be checked on future accesses closer to them. 10 levels covers deep
@@ -174,11 +174,10 @@ impl AgentsMdTracker {
 
         let mut discoveries = Vec::new();
 
-        // Compute the gated filename / rules-dir lists once per call (they are constant across the
-        // walk). The vendor-gated entries drop when the matching compat cell is off; all-on
-        // reproduces `AGENT_FILENAMES` / `RULES_DIRS` exactly.
+        // Compute the gated filename list once per call (it is constant across the walk). The
+        // vendor-gated entries drop when the matching compat cell is off; all-on reproduces
+        // `AGENT_FILENAMES` exactly.
         let agent_filenames = self.compat.agent_filenames();
-        let rules_dirs = self.compat.rules_dirs();
 
         // Walk up from start_dir to git_root, bounded by MAX_WALK_DEPTH
         let mut current = Some(start_dir.as_path());
@@ -233,11 +232,9 @@ impl AgentsMdTracker {
                     }
                 }
 
-                // Check for rules files in .grok/rules/, .claude/rules/, and
+                // Check for rules files in .mlx-agent/rules/, .claude/rules/, and
                 // .cursor/rules/ subdirectories (vendor-compat paths).
-                // `rules_dirs` is computed once above the walk.
-                for rules_subdir in &rules_dirs {
-                    let rules_dir = dir.join(rules_subdir);
+                for rules_dir in self.compat.project_rules_dirs(dir) {
                     let stat_result =
                         tokio::time::timeout(FS_SYSCALL_TIMEOUT, tokio::fs::metadata(&rules_dir))
                             .await;
@@ -760,6 +757,30 @@ mod tests {
             "Should discover .claude/rules/style.md, got: {:?}",
             results
         );
+    }
+
+    #[tokio::test]
+    async fn check_path_reads_rules_only_from_the_agent_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let sub = root.join("sub");
+        for (dir, name) in [(".grok", "grokmark.md"), (".mlx-agent", "mlxmark.md")] {
+            let rules_dir = sub.join(dir).join("rules");
+            fs::create_dir_all(&rules_dir).unwrap();
+            fs::write(rules_dir.join(name), "# rule").unwrap();
+        }
+
+        let mut tracker = AgentsMdTracker::new();
+        tracker
+            .seed(vec![], Some(root.to_path_buf()), vec![], None)
+            .await;
+
+        let results = tracker.check_path(&sub.join("foo.rs")).await;
+        let names: Vec<_> = results
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert_eq!(names, vec!["mlxmark.md"]);
     }
 
     #[tokio::test]

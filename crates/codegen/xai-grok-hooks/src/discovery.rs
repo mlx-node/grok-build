@@ -392,7 +392,10 @@ pub fn discover_hook_source_paths(options: DiscoveryOptions<'_>) -> HookSourcePa
                 root.join(".claude").join("settings.local.json"),
             ));
         }
-        project.push(classify_grok_hook_source(root.join(".grok").join("hooks")));
+        if let Some(folder) = xai_dirs::project_agent_dir_in(root, options.home, options.grok_home)
+        {
+            project.push(classify_grok_hook_source(folder.join("hooks")));
+        }
         if include_cursor {
             project.push(HookSourceConfig::SettingsFile(
                 root.join(".cursor").join("hooks.json"),
@@ -583,6 +586,52 @@ mod tests {
         .into_iter()
         .collect();
         assert_eq!(gates, expected, "gate events changed");
+    }
+
+    #[test]
+    fn project_hooks_come_only_from_the_agent_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repo");
+        let home = tmp.path().join("home");
+        for dir in [".grok", ".mlx-agent"] {
+            std::fs::create_dir_all(root.join(dir).join("hooks")).unwrap();
+        }
+        fn options<'a>(
+            git_root: &'a Path,
+            agent_home: &'a Path,
+            home: &'a Path,
+        ) -> DiscoveryOptions<'a> {
+            DiscoveryOptions {
+                git_root: Some(git_root),
+                grok_home: Some(agent_home),
+                home: Some(home),
+                compat: CompatHooks {
+                    cursor: false,
+                    claude: false,
+                },
+                claude_import: ClaudeImport::NotImported,
+                trust: Trust::Trusted,
+            }
+        }
+        let agent_home = home.join(".mlx-agent");
+        let project: Vec<PathBuf> = discover_hook_source_paths(options(&root, &agent_home, &home))
+            .project
+            .iter()
+            .map(|source| match source {
+                HookSourceConfig::SettingsFile(path) | HookSourceConfig::Directory(path) => {
+                    path.clone()
+                }
+            })
+            .collect();
+        assert_eq!(project, vec![root.join(".mlx-agent").join("hooks")]);
+
+        let other_agent_home = tmp.path().join("agent-home");
+        let in_home = discover_hook_source_paths(options(&home, &other_agent_home, &home));
+        assert!(
+            in_home.project.is_empty(),
+            "the home folder has no project hooks: {:?}",
+            in_home.project
+        );
     }
 
     #[test]

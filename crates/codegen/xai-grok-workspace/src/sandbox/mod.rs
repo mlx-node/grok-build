@@ -717,11 +717,13 @@ impl WorkspaceSandbox {
     }
 
     /// The files the mode is read from: the user's and the folder's `workspaced.toml`.
-    pub(crate) fn mode_layers(&self) -> [PathBuf; 2] {
-        [
-            crate::sandbox_mode::user_config_path(&self.grok_home),
-            crate::sandbox_mode::workspace_config_path(&self.root),
-        ]
+    pub(crate) fn mode_layers(&self) -> Vec<PathBuf> {
+        std::iter::once(crate::sandbox_mode::user_config_path(&self.grok_home))
+            .chain(crate::sandbox_mode::workspace_config_path(
+                &self.root,
+                &self.grok_home,
+            ))
+            .collect()
     }
 
     /// The store's clock: grant rows are stamped with it so their expiry is judged by the same
@@ -839,7 +841,8 @@ impl WorkspaceSandbox {
     fn mode_stamp(&self) -> ModeStamp {
         ModeStamp {
             env: std::env::var(SANDBOX_MODE_ENV).ok(),
-            workspace_file: file_stamp(&crate::sandbox_mode::workspace_config_path(&self.root)),
+            workspace_file: crate::sandbox_mode::workspace_config_path(&self.root, &self.grok_home)
+                .and_then(|path| file_stamp(&path)),
             user_file: file_stamp(&crate::sandbox_mode::user_config_path(&self.grok_home)),
             managed_file: file_stamp(&crate::sandbox_mode::managed_config_path(&self.grok_home)),
         }
@@ -876,14 +879,14 @@ impl WorkspaceSandbox {
         }
     }
 
-    /// `sandbox.mode.set`: write `mode` into the folder's `.grok/workspaced.toml` and answer with
+    /// `sandbox.mode.set`: write `mode` into the folder's `.mlx-agent/workspaced.toml` and answer with
     /// the mode the layers resolve to *now* and its source, which the workspace layer (tighten
     /// only) may not have set. The caller then runs [`WorkspaceSandbox::sync_network`], which
     /// engages the folder when the mode is not `off`. A command already running keeps its mode
     /// ([`WorkspaceSandbox::running_under_another_mode`]).
     ///
     /// # Errors
-    /// [`set_workspace_mode_in`]'s: a root that is not a directory, an unwritable `.grok/`, a file
+    /// [`set_workspace_mode_in`]'s: a root that is not a directory, an unwritable `.mlx-agent/`, a file
     /// that is not TOML.
     pub fn set_workspace_mode(
         &self,

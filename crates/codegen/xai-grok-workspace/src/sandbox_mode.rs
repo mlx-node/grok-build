@@ -1,7 +1,7 @@
 //! Per-workspace resolution of the command-sandbox rollout mode: `GROK_SANDBOX_MODE`, then the
 //! fleet layer (`RemoteSettings.sandbox_mode`, else the host's `<grok_home>/managed_config.toml`),
 //! then `<grok_home>/workspaced.toml`, then the default (`off`); the workspace's
-//! `<workspace>/.grok/workspaced.toml` may only tighten the result. On a host with no sandbox
+//! `<workspace>/.mlx-agent/workspaced.toml` may only tighten the result. On a host with no sandbox
 //! backend, an `enforce` the rollout switch set runs as `off` (`SandboxMode::resolve_on_host`);
 //! a developer's own `enforce` keeps refusing there.
 //!
@@ -9,10 +9,10 @@
 //! here. They are read as the daemon reads any file a command could have planted — opened
 //! without following a symlink or blocking, only when a regular file (the user's own, for the
 //! user layer), up to a bound. A symlink on the way to a layer below the folder, or at or below
-//! the grok home — the file, a planted `.grok`, a linked grok home — is followed only to a file
+//! the grok home — the file, a planted `.mlx-agent`, a linked grok home — is followed only to a file
 //! outside every place a command may write or may have written, and that file is read the same
 //! way; `sandbox.mode.set` never writes through one. A layer whose directory is not one (a
-//! `.grok` that is a file) is absent, as a missing one is.
+//! `.mlx-agent` that is a file) is absent, as a missing one is.
 //!
 //! Invariants:
 //!
@@ -27,7 +27,7 @@
 //!    is read as the file itself would be.
 //! 3. **Links into writable places are refused**, as invariant 1 says: into the workspace, a
 //!    build-cache tree, or a place a grant or another served folder opened; a link at the file
-//!    or at a directory on the way (`.grok`) alike, and `sandbox.mode.set` writes through none.
+//!    or at a directory on the way (`.mlx-agent`) alike, and `sandbox.mode.set` writes through none.
 //!
 //! The precedence itself is `xai_grok_sandbox::command::SandboxMode::resolve`; this module reads
 //! the layers, so the pure logic and the IO are tested apart.
@@ -87,12 +87,10 @@ pub fn resolve_sandbox_mode_in(inputs: SandboxModeInputs<'_>) -> ResolvedSandbox
         Some(remote) => Ok(remote.sandbox_mode),
         None => managed_mode_layer(&inputs),
     };
-    let workspace = read_mode_layer(
-        &workspace_config_path(inputs.workspace_root),
-        inputs.workspace_root,
-        FileOwner::Any,
-        &inputs,
-    );
+    let workspace = match workspace_config_path(inputs.workspace_root, inputs.grok_home) {
+        Some(path) => read_mode_layer(&path, inputs.workspace_root, FileOwner::Any, &inputs),
+        None => Ok(None),
+    };
     let user = read_mode_layer(
         &user_config_path(inputs.grok_home),
         // From the grok home's parent, not `/`: the grok home itself is judged, while a link
@@ -120,11 +118,15 @@ pub fn user_config_path(grok_home: &Path) -> PathBuf {
     grok_home.join(WORKSPACED_CONFIG_FILENAME)
 }
 
-/// The workspace layer's file: `<workspace_root>/.grok/workspaced.toml`.
-pub fn workspace_config_path(workspace_root: &Path) -> PathBuf {
-    workspace_root
-        .join(".grok")
-        .join(WORKSPACED_CONFIG_FILENAME)
+/// The workspace layer's file: `<workspace_root>/.mlx-agent/workspaced.toml`, or `None` when the
+/// folder has no project agent folder (the home folder, or its `.mlx-agent` is `grok_home`).
+pub fn workspace_config_path(workspace_root: &Path, grok_home: &Path) -> Option<PathBuf> {
+    xai_dirs::project_agent_dir_in(
+        workspace_root,
+        xai_dirs::home_dir().as_deref(),
+        Some(grok_home),
+    )
+    .map(|folder| folder.join(WORKSPACED_CONFIG_FILENAME))
 }
 
 /// The managed layer's file: `<grok_home>/managed_config.toml`, the organisation's config (the
@@ -202,7 +204,7 @@ pub enum SandboxModeWriteError {
 /// are resolved again, so the answer is the mode the folder is in *now* and where it came from
 /// (the workspace layer only tightens: a `mode.set off` under a user layer of `observe` answers
 /// `observe` / `user_config`). A `workspace_root` that is not a directory is refused — the write
-/// creates `.grok/`, never the folder. A served folder's sandbox wraps this and drops its cached
+/// creates `.mlx-agent/`, never the folder. A served folder's sandbox wraps this and drops its cached
 /// resolution; [`set_workspace_mode_at`] is the same for a folder nothing serves.
 ///
 /// # Errors
@@ -245,14 +247,14 @@ pub fn set_workspace_mode_at(
     )
 }
 
-/// Set `[sandbox] mode` in the workspace's `.grok/workspaced.toml` (`sandbox.mode.set`), keeping
-/// every other key and comment and replacing the file atomically. Creates `.grok/` and the file
+/// Set `[sandbox] mode` in the workspace's `.mlx-agent/workspaced.toml` (`sandbox.mode.set`), keeping
+/// every other key and comment and replacing the file atomically. Creates `.mlx-agent/` and the file
 /// when absent. Returns the path written. The CLI's `config.toml` beside it is never touched.
 ///
 /// # Errors
-/// The folder's `.grok` is the grok home (the file is the user layer every folder reads) or a
-/// symlink ([`HeldDir`]), the file exists but is not TOML, `[sandbox]` is not a table, or the
-/// write fails.
+/// The folder has no project agent folder (the home folder, or its `.mlx-agent` is the grok home,
+/// so the file would be the user layer every folder reads), the folder is a symlink ([`HeldDir`]),
+/// the file exists but is not TOML, `[sandbox]` is not a table, or the write fails.
 pub fn write_workspace_sandbox_mode(
     workspace_root: &Path,
     mode: SandboxMode,
@@ -269,27 +271,38 @@ pub fn write_workspace_sandbox_mode_in(
     grok_home: &Path,
     mode: SandboxMode,
 ) -> Result<PathBuf, SandboxModeWriteError> {
-    let path = workspace_config_path(workspace_root);
+    let user_layer = || SandboxModeWriteError::UserLayer {
+        path: user_config_path(grok_home),
+    };
     // SECURITY: for the home folder the workspace file is the user layer; a folder's write may
     // only tighten that folder, never switch every folder's mode
-    if is_same_path(
-        &canonical_path(&workspace_root.join(".grok")),
-        &canonical_path(grok_home),
-    ) {
-        return Err(SandboxModeWriteError::UserLayer { path });
+    let Some(path) = workspace_config_path(workspace_root, grok_home) else {
+        return Err(user_layer());
+    };
+    if path
+        .parent()
+        .is_some_and(|folder| is_same_path(&canonical_path(folder), &canonical_path(grok_home)))
+    {
+        return Err(user_layer());
     }
     #[cfg(test)]
     AFTER_USER_LAYER_CHECK.with_borrow_mut(|hook| hook.as_mut().map(|hook| hook()));
     let anchor = canonical_path(workspace_root);
+    let Some(folder) =
+        xai_dirs::project_agent_dir_in(&anchor, xai_dirs::home_dir().as_deref(), Some(grok_home))
+    else {
+        return Err(user_layer());
+    };
     let create_dir = |source| SandboxModeWriteError::CreateDir {
-        path: workspace_root.join(".grok"),
+        path: path
+            .parent()
+            .map_or_else(|| path.clone(), Path::to_path_buf),
         source,
     };
-    let dir =
-        HeldDir::open(&anchor, &anchor.join(".grok"), FileOwner::Any, true).map_err(create_dir)?;
+    let dir = HeldDir::open(&anchor, &folder, FileOwner::Any, true).map_err(create_dir)?;
     // The root may have been relinked since the check above; the held handle cannot be
     if dir.is(grok_home).map_err(create_dir)? {
-        return Err(SandboxModeWriteError::UserLayer { path });
+        return Err(user_layer());
     }
     // Writers of one folder's file take turns: `replace` takes another writer's rename landing
     // between its own and its check for a swap, and removes that file
@@ -406,7 +419,7 @@ fn read_layer_mode(
 }
 
 /// The layer file's text, `path` lying below `anchor` (the served folder, or the grok home's
-/// parent so a planted `.grok` link is judged); through a link only its real path is read, and
+/// parent so a planted `.mlx-agent` link is judged); through a link only its real path is read, and
 /// only where no command may write ([`real_path_below`]).
 fn read_layer_text(
     path: &Path,

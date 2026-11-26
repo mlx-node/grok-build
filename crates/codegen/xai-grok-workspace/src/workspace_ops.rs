@@ -254,38 +254,28 @@ fn session_tracker(
         .ok_or_else(|| WorkspaceError::SessionNotFound(sid.to_owned()))?;
     Ok(session.hunk_tracker().clone())
 }
-/// Ancestor hop budget when locating `.grok/repos.json`.
+/// Ancestor hop budget when locating `.mlx-agent/repos.json`.
 /// A single-repo sandbox rewrite is one hop (`/workspace/app` to `/workspace`); desktop workspaces can sit deeper, so this is a backstop only.
-/// Primary bounds are the sandbox root (`/workspace`) and the user-global grok home.
+/// Primary bounds are the sandbox root (`/workspace`) and the home folder.
 const REPOS_MANIFEST_MAX_ANCESTOR_HOPS: usize = 16;
-/// Directories to probe for [`REPOS_MANIFEST_RELATIVE_PATH`], starting at `root_cwd` (the agent cwd after a single-repo rewrite) and walking up.
-/// Does not escape the sandbox workspace or load `~/.grok/repos.json` / `$GROK_HOME/repos.json` (user-global, not a provisioned workspace).
-fn repos_manifest_search_dirs(start: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let rel = xai_grok_workspace_types::rpc::repos::REPOS_MANIFEST_RELATIVE_PATH;
+/// Manifest paths to probe, starting at `root_cwd` (the agent cwd after a single-repo rewrite) and walking up.
+/// Stops at the home folder and at a folder whose `.mlx-agent` is the agent home, so the user-global home is never read as a provisioned workspace.
+fn repos_manifest_search_paths(start: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let name = xai_grok_workspace_types::rpc::repos::REPOS_MANIFEST_FILENAME;
     let home = xai_dirs::home_dir();
-    let mut global_manifests = Vec::with_capacity(2);
-    if let Some(v) = std::env::var_os("GROK_HOME")
-        && !v.is_empty()
-    {
-        global_manifests.push(std::path::PathBuf::from(v).join("repos.json"));
-    }
-    if let Some(user_home) = xai_grok_config::user_grok_home() {
-        global_manifests.push(user_home.join("repos.json"));
-    }
     let mut out = Vec::new();
     let mut dir = Some(start);
     for _ in 0..=REPOS_MANIFEST_MAX_ANCESTOR_HOPS {
         let Some(d) = dir else {
             break;
         };
-        let manifest = d.join(rel);
-        if global_manifests.iter().any(|g| g == &manifest) {
-            break;
-        }
         if home.as_deref() == Some(d) || crate::trust::is_home_dir(d) {
             break;
         }
-        out.push(d.to_path_buf());
+        let Some(folder) = xai_dirs::project_agent_dir(d) else {
+            break;
+        };
+        out.push(folder.join(name));
         if d == std::path::Path::new("/workspace") {
             break;
         }
@@ -300,11 +290,9 @@ impl WorkspaceOp for ReposListReq {
         ws: &WorkspaceHandle,
         _session_id: Option<&str>,
     ) -> WorkspaceResult<Self::Response> {
-        let rel = xai_grok_workspace_types::rpc::repos::REPOS_MANIFEST_RELATIVE_PATH;
         let start = ws.root_cwd()?;
         let mut manifest = RepoManifest::new(Vec::new());
-        for d in repos_manifest_search_dirs(&start) {
-            let path = d.join(rel);
+        for path in repos_manifest_search_paths(&start) {
             match tokio::fs::read(&path).await {
                 Ok(bytes) => {
                     manifest = RepoManifest::from_json_bytes(&bytes).map_err(|e| {
@@ -351,7 +339,10 @@ pub(crate) async fn materialized_git_roots(
     Ok(manifest.materialized_mounts(&root))
 }
 async fn load_repos_manifest(root: &std::path::Path) -> WorkspaceResult<RepoManifest> {
-    let path = root.join(xai_grok_workspace_types::rpc::repos::REPOS_MANIFEST_RELATIVE_PATH);
+    let Some(folder) = xai_dirs::project_agent_dir(root) else {
+        return Ok(RepoManifest::new(Vec::new()));
+    };
+    let path = folder.join(xai_grok_workspace_types::rpc::repos::REPOS_MANIFEST_FILENAME);
     match tokio::fs::read(&path).await {
         Ok(bytes) => RepoManifest::from_json_bytes(&bytes)
             .map_err(|e| WorkspaceError::HubError(e.to_string())),
@@ -1879,10 +1870,11 @@ mod tests {
             session_branch: "conv/1".into(),
             repo_backend: None,
         }]);
-        std::fs::create_dir_all(tmp.path().join(".grok")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent")).unwrap();
         std::fs::write(
             tmp.path()
-                .join(xai_grok_workspace_types::rpc::repos::REPOS_MANIFEST_RELATIVE_PATH),
+                .join(".mlx-agent")
+                .join(xai_grok_workspace_types::rpc::repos::REPOS_MANIFEST_FILENAME),
             one.to_json_bytes().unwrap(),
         )
         .unwrap();
@@ -1909,7 +1901,8 @@ mod tests {
         ]);
         std::fs::write(
             tmp.path()
-                .join(xai_grok_workspace_types::rpc::repos::REPOS_MANIFEST_RELATIVE_PATH),
+                .join(".mlx-agent")
+                .join(xai_grok_workspace_types::rpc::repos::REPOS_MANIFEST_FILENAME),
             many.to_json_bytes().unwrap(),
         )
         .unwrap();
@@ -1931,52 +1924,72 @@ mod tests {
             session_branch: "conv/1".into(),
             repo_backend: None,
         }]);
-        std::fs::create_dir_all(sandbox_ws.join(".grok")).unwrap();
+        std::fs::create_dir_all(sandbox_ws.join(".mlx-agent")).unwrap();
         std::fs::write(
-            sandbox_ws.join(xai_grok_workspace_types::rpc::repos::REPOS_MANIFEST_RELATIVE_PATH),
+            sandbox_ws
+                .join(".mlx-agent")
+                .join(xai_grok_workspace_types::rpc::repos::REPOS_MANIFEST_FILENAME),
             one.to_json_bytes().unwrap(),
+        )
+        .unwrap();
+        let grokmark = RepoManifest::new(vec![ProvisionedRepo {
+            name: "grokmark".into(),
+            repository: "acme/grokmark".into(),
+            mount_path: "/workspace/grokmark".into(),
+            base_branch: "".into(),
+            session_branch: "conv/1".into(),
+            repo_backend: None,
+        }]);
+        std::fs::create_dir_all(agent_cwd.join(".grok")).unwrap();
+        std::fs::write(
+            agent_cwd.join(".grok").join("repos.json"),
+            grokmark.to_json_bytes().unwrap(),
         )
         .unwrap();
         let ops = WorkspaceOps::for_test_in(&agent_cwd);
         let listed = ops.repos_list().await.expect("walk up to sandbox ws");
-        assert_eq!(one.repos, listed.repos);
+        assert_eq!(one.repos, listed.repos, "a .grok/repos.json is never read");
     }
     #[test]
-    fn repos_manifest_search_dirs_stops_at_sandbox_workspace_root() {
+    fn repos_manifest_search_paths_stops_at_sandbox_workspace_root() {
         let _lock = crate::ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
         let _home = crate::TestEnvGuard::set("HOME", home.path());
         let _unset_grok = crate::TestEnvGuard::unset("GROK_HOME");
-        let dirs = repos_manifest_search_dirs(std::path::Path::new("/workspace/app"));
+        let dirs = repos_manifest_search_paths(std::path::Path::new("/workspace/app"));
         assert_eq!(
             dirs,
             vec![
-                std::path::PathBuf::from("/workspace/app"),
-                std::path::PathBuf::from("/workspace"),
+                std::path::PathBuf::from("/workspace/app/.mlx-agent/repos.json"),
+                std::path::PathBuf::from("/workspace/.mlx-agent/repos.json"),
             ]
         );
     }
     #[test]
-    fn repos_manifest_search_dirs_keeps_sandbox_root_when_home_unset() {
+    fn repos_manifest_search_paths_keeps_sandbox_root_when_home_unset() {
         let _lock = crate::ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let _home = crate::TestEnvGuard::unset("HOME");
         let _unset_grok = crate::TestEnvGuard::unset("GROK_HOME");
-        let dirs = repos_manifest_search_dirs(std::path::Path::new("/workspace/app"));
+        let dirs = repos_manifest_search_paths(std::path::Path::new("/workspace/app"));
         assert!(
-            dirs.contains(&std::path::PathBuf::from("/workspace/app")),
+            dirs.contains(&std::path::PathBuf::from(
+                "/workspace/app/.mlx-agent/repos.json"
+            )),
             "agent cwd must still be probed: {dirs:?}"
         );
         assert!(
-            dirs.contains(&std::path::PathBuf::from("/workspace")),
+            dirs.contains(&std::path::PathBuf::from(
+                "/workspace/.mlx-agent/repos.json"
+            )),
             "sandbox root manifest must not be treated as user-global when HOME is unset: {dirs:?}"
         );
     }
     #[test]
-    fn repos_manifest_search_dirs_skips_user_global_grok_home() {
+    fn repos_manifest_search_paths_skips_user_global_grok_home() {
         let _lock = crate::ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -1984,13 +1997,16 @@ mod tests {
         let _home = crate::TestEnvGuard::set("HOME", home.path());
         let _unset_grok = crate::TestEnvGuard::unset("GROK_HOME");
         let start = home.path().join("src").join("org").join("app");
-        let dirs = repos_manifest_search_dirs(&start);
-        assert!(dirs.contains(&start));
-        assert!(dirs.contains(&home.path().join("src").join("org")));
-        assert!(dirs.contains(&home.path().join("src")));
+        let dirs = repos_manifest_search_paths(&start);
+        let manifest = |dir: std::path::PathBuf| dir.join(".mlx-agent").join("repos.json");
+        assert!(dirs.contains(&manifest(start.clone())));
+        assert!(dirs.contains(&manifest(home.path().join("src").join("org"))));
+        assert!(dirs.contains(&manifest(home.path().join("src"))));
         assert!(
-            !dirs.iter().any(|d| d == home.path()),
-            "must not probe $HOME/.grok/repos.json: {dirs:?}"
+            !dirs
+                .iter()
+                .any(|d| d.starts_with(home.path().join(".mlx-agent"))),
+            "must not probe the agent home's repos.json: {dirs:?}"
         );
     }
     /// The test is sync and uses `block_on` so `ENV_TEST_LOCK` is not held across `.await` (clippy `await_holding_lock`).
@@ -2010,12 +2026,14 @@ mod tests {
             session_branch: "x".into(),
             repo_backend: None,
         }]);
-        std::fs::create_dir_all(home.path().join(".grok")).unwrap();
-        std::fs::write(
-            home.path().join(".grok").join("repos.json"),
-            global.to_json_bytes().unwrap(),
-        )
-        .unwrap();
+        for folder in [".grok", ".mlx-agent"] {
+            std::fs::create_dir_all(home.path().join(folder)).unwrap();
+            std::fs::write(
+                home.path().join(folder).join("repos.json"),
+                global.to_json_bytes().unwrap(),
+            )
+            .unwrap();
+        }
         let agent_cwd = home.path().join("src").join("app");
         std::fs::create_dir_all(&agent_cwd).unwrap();
         let ops = WorkspaceOps::for_test_in(&agent_cwd);
@@ -2026,7 +2044,7 @@ mod tests {
         let listed = rt.block_on(ops.repos_list()).expect("list");
         assert!(
             listed.repos.is_empty(),
-            "missing workspace manifest must not fall back to ~/.grok/repos.json: {:?}",
+            "missing workspace manifest must not fall back to a home repos.json: {:?}",
             listed.repos
         );
     }

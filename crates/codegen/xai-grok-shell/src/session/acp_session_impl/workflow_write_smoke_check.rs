@@ -1,4 +1,4 @@
-//! When a write or edit tool touches a project `.grok/workflows/*.rhai` script, run the workflow validator on it and warn the model on failure.
+//! When a write or edit tool touches a project `.mlx-agent/workflows/*.rhai` script, run the workflow validator on it and warn the model on failure.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
@@ -34,7 +34,7 @@ pub(super) fn is_project_workflow_rhai_path(path: &Path) -> bool {
     let components: Vec<_> = path.components().collect();
     components.windows(2).any(|pair| {
         let [a, b] = pair else { return false };
-        matches!(a, Component::Normal(name) if *name == ".grok")
+        matches!(a, Component::Normal(name) if xai_dirs::is_agent_dir_name(name))
             && matches!(b, Component::Normal(name) if *name == "workflows")
     })
 }

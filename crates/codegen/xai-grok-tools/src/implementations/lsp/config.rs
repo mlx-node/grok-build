@@ -1,4 +1,4 @@
-//! LSP server configuration from `.grok/lsp.json`.
+//! LSP server configuration from `.mlx-agent/lsp.json`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -27,7 +27,7 @@ pub fn load_servers_with_plugins_sourced(
     );
 
     let user_path = crate::util::grok_home::grok_home().join("lsp.json");
-    let project_path = cwd.join(".grok").join("lsp.json");
+    let project_path = project_lsp_path(cwd);
 
     // User-level servers
     let mut servers: BTreeMap<String, (LspServerConfig, ConfigSource)> = load_file(&user_path)
@@ -46,16 +46,18 @@ pub fn load_servers_with_plugins_sourced(
         .collect();
 
     // Project-level overrides
-    for (name, cfg) in load_file(&project_path) {
-        servers.insert(
-            name,
-            (
-                cfg,
-                ConfigSource::Project {
-                    path: project_path.clone(),
-                },
-            ),
-        );
+    if let Some(project_path) = project_path {
+        for (name, cfg) in load_file(&project_path) {
+            servers.insert(
+                name,
+                (
+                    cfg,
+                    ConfigSource::Project {
+                        path: project_path.clone(),
+                    },
+                ),
+            );
+        }
     }
 
     // Plugin file-based configs
@@ -124,14 +126,19 @@ pub fn filter_project_lsp_when_untrusted(
         .collect()
 }
 
-/// Load LSP server configs from `~/.grok/lsp.json` and `<cwd>/.grok/lsp.json`.
+/// `<cwd>/.mlx-agent/lsp.json`, or `None` where `cwd` has no project agent folder.
+pub fn project_lsp_path(cwd: &Path) -> Option<std::path::PathBuf> {
+    xai_dirs::project_agent_dir(cwd).map(|folder| folder.join("lsp.json"))
+}
+
+/// Load LSP server configs from the agent home's `lsp.json` and `<cwd>/.mlx-agent/lsp.json`.
 /// Project config overrides user config for the same server name.
 pub fn load_servers(cwd: &Path) -> BTreeMap<String, LspServerConfig> {
     let user_path = crate::util::grok_home::grok_home().join("lsp.json");
-    let project_path = cwd.join(".grok").join("lsp.json");
+    let project_path = project_lsp_path(cwd);
 
     let mut merged = load_file(&user_path);
-    let project = load_file(&project_path);
+    let project = project_path.as_deref().map(load_file).unwrap_or_default();
 
     if !merged.is_empty() {
         tracing::info!(
@@ -144,7 +151,7 @@ pub fn load_servers(cwd: &Path) -> BTreeMap<String, LspServerConfig> {
     if !project.is_empty() {
         tracing::info!(
             source = "project",
-            path = %project_path.display(),
+            path = ?project_path,
             servers = ?project.keys().collect::<Vec<_>>(),
             "loaded project lsp.json"
         );
@@ -172,7 +179,7 @@ pub fn load_servers(cwd: &Path) -> BTreeMap<String, LspServerConfig> {
     if merged.is_empty() {
         tracing::info!(
             user = %user_path.display(),
-            project = %project_path.display(),
+            project = ?project_path,
             "no LSP servers configured"
         );
     }
@@ -301,7 +308,10 @@ impl LspServerConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{LspServerConfig, filter_project_lsp_when_untrusted};
+    use super::{
+        LspServerConfig, filter_project_lsp_when_untrusted, load_servers,
+        load_servers_with_plugins_sourced,
+    };
     use crate::types::config_source::ConfigSource;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
@@ -337,6 +347,26 @@ mod tests {
             ),
         );
         m
+    }
+
+    #[test]
+    fn project_lsp_json_is_read_only_from_the_agent_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let server = |name: &str| {
+            format!(
+                r#"{{"{name}": {{"command": "{name}", "extensions": {{".{name}": "{name}"}}}}}}"#
+            )
+        };
+        for (dir, name) in [(".grok", "grokmark"), (".mlx-agent", "mlxmark")] {
+            std::fs::create_dir_all(tmp.path().join(dir)).unwrap();
+            std::fs::write(tmp.path().join(dir).join("lsp.json"), server(name)).unwrap();
+        }
+        let servers = load_servers(tmp.path());
+        assert!(servers.contains_key("mlxmark"), "{servers:?}");
+        assert!(!servers.contains_key("grokmark"), "{servers:?}");
+        let sourced = load_servers_with_plugins_sourced(tmp.path(), &[], &[], &[], &[]);
+        assert!(sourced.contains_key("mlxmark"));
+        assert!(!sourced.contains_key("grokmark"));
     }
 
     #[test]

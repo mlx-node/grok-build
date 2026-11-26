@@ -396,7 +396,7 @@ pub fn repo_config_kinds(cwd: &Path) -> Vec<&'static str> {
     collect_repo_config_kinds(cwd, false)
 }
 
-/// Whether a project `.grok/config.toml` `[permission]` value would contribute rules to the permission resolver.
+/// Whether a project `.mlx-agent/config.toml` `[permission]` value would contribute rules to the permission resolver.
 /// Mirrors the shapes `permission::resolution` loads: non-empty `allow`/`deny`/`ask` arrays, or a non-empty verbose `rules` array.
 /// Empty arrays and empty tables do not gate (same as an empty `[mcp_servers]` or `[plugins].paths`).
 fn config_toml_permission_contributes(permission_value: &TomlValue) -> bool {
@@ -453,12 +453,13 @@ fn collect_repo_config_kinds(cwd: &Path, first_only: bool) -> Vec<&'static str> 
     if !crate::project_config::find_mcp_json_files_in(&chain.dirs).is_empty() {
         hit!("mcp");
     }
-    // Project `.grok/config.toml` markers: a non-empty `[mcp_servers]` table or `[plugins].paths` array, or a contributing `[permission]` section
+    // Project `.mlx-agent/config.toml` markers: a non-empty `[mcp_servers]` table or `[plugins].paths` array, or a contributing `[permission]` section
     // `[plugins].paths` loads as auto-trusted ConfigPath plugins; `[permission]` allow/deny/ask rules auto-approve or block tools
     // A clone whose ONLY repo-local config is either must still be gated (else it resolves Trusted and the loader runs ungated)
     for path in crate::project_config::find_project_configs_in(
         &chain.dirs,
-        xai_grok_config::user_grok_home().as_deref(),
+        xai_dirs::home_dir().as_deref(),
+        xai_dirs::resolve_grok_home().as_deref(),
     ) {
         let Ok(root) = xai_grok_config::load_config_file(&path) else {
             continue;
@@ -485,8 +486,12 @@ fn collect_repo_config_kinds(cwd: &Path, first_only: bool) -> Vec<&'static str> 
             hit!("permission");
         }
     }
-    // Project `.grok/lsp.json`.
-    if cwd.join(".grok").join("lsp.json").is_file() {
+    // Project `.mlx-agent/lsp.json`.
+    let cwd_folder = xai_dirs::project_agent_dir(cwd);
+    if cwd_folder
+        .as_ref()
+        .is_some_and(|folder| folder.join("lsp.json").is_file())
+    {
         hit!("lsp");
     }
     // Project `.cursor/mcp.json`: vendor MCP loading is default-on and tagged `Project`, so a repo shipping ONLY this file must still be gated
@@ -508,32 +513,39 @@ fn collect_repo_config_kinds(cwd: &Path, first_only: bool) -> Vec<&'static str> 
     // must not resolve trusted. Presence is type-agnostic: a directory or
     // symlink at a vendor hook path must gate too.
     let hook_root = chain.git_root.as_deref().unwrap_or(cwd);
-    if crate::util::path_present_or_uncertain(&hook_root.join(".grok").join("hooks"))
+    let hook_root_folder = xai_dirs::project_agent_dir(hook_root);
+    if hook_root_folder
+        .as_ref()
+        .is_some_and(|folder| crate::util::path_present_or_uncertain(&folder.join("hooks")))
         || crate::util::path_present_or_uncertain(&hook_root.join(".cursor").join("hooks.json"))
     {
         hit!("hooks");
     }
     // Project PLUGIN dirs: project-scoped plugins fall under folder-trust too, so a repo-local plugin dir is repo-controlled code-exec (hooks/MCP)
-    // Else a plugin clone (e.g. `.grok/plugins/evil/`, even one in a subdir launched via `cd sub && grok`) would resolve trusted and run ungated.
+    // Else a plugin clone (e.g. `.mlx-agent/plugins/evil/`, even one in a subdir launched via `cd sub && grok`) would resolve trusted and run ungated.
     // Uses the shared cwd-to-git-root walk so detection matches exactly what `discover_plugins` scans for Project scope, erring on the secure side
     if !xai_grok_agent::plugins::project_plugin_dirs_in(&chain.dirs).is_empty() {
         hit!("plugins");
     }
-    // Project AGENT dirs (`.grok/agents` / `.claude/agents`): an agents-only clone must still be gated
+    // Project AGENT dirs (`.mlx-agent/agents` / `.claude/agents`): an agents-only clone must still be gated
     // A project agent definition can carry an inline `hooks:` block (repo-controlled code-exec) and can shadow a built-in subagent by name
     // Uses the shared cwd-to-git-root walk so detection can't drift from agent discovery (same pattern as the plugin check above)
     if !xai_grok_agent::discovery::project_agent_dirs_in(&chain.dirs).is_empty() {
         hit!("agents");
     }
     // Presence matches exact-cwd discovery without parsing repository content.
-    let grok = cwd.join(".grok");
-    if directory_present_or_uncertain(&grok.join("roles")) {
-        hit!("roles");
+    if let Some(folder) = &cwd_folder {
+        if directory_present_or_uncertain(&folder.join("roles")) {
+            hit!("roles");
+        }
+        if directory_present_or_uncertain(&folder.join("personas")) {
+            hit!("personas");
+        }
     }
-    if directory_present_or_uncertain(&grok.join("personas")) {
-        hit!("personas");
-    }
-    if directory_present_or_uncertain(&hook_root.join(".grok").join("workflows")) {
+    if hook_root_folder
+        .as_ref()
+        .is_some_and(|folder| directory_present_or_uncertain(&folder.join("workflows")))
+    {
         hit!("workflows");
     }
     if xai_grok_agent::prompt::agents_md::has_project_instruction_markers_in(
@@ -615,7 +627,7 @@ mod tests {
     #[test]
     fn repo_configs_present_detects_grok_config_mcp_servers() {
         let tmp = repo_tmp();
-        let grok = tmp.path().join(".grok");
+        let grok = tmp.path().join(".mlx-agent");
         std::fs::create_dir_all(&grok).unwrap();
         std::fs::write(grok.join("config.toml"), "[mcp_servers.x]\ncommand=\"y\"\n").unwrap();
         assert!(repo_configs_present(tmp.path()));
@@ -624,7 +636,7 @@ mod tests {
     #[test]
     fn repo_configs_present_detects_grok_lsp_json() {
         let tmp = repo_tmp();
-        let grok = tmp.path().join(".grok");
+        let grok = tmp.path().join(".mlx-agent");
         std::fs::create_dir_all(&grok).unwrap();
         std::fs::write(grok.join("lsp.json"), "{}").unwrap();
         assert!(repo_configs_present(tmp.path()));
@@ -660,7 +672,7 @@ mod tests {
     #[test]
     fn repo_configs_present_detects_project_rules_from_subdir() {
         let tmp = repo_tmp();
-        let rules = tmp.path().join(".grok").join("rules");
+        let rules = tmp.path().join(".mlx-agent").join("rules");
         std::fs::create_dir_all(&rules).unwrap();
         std::fs::write(rules.join("style.md"), "# style\n").unwrap();
         let subdir = tmp.path().join("crates").join("inner");
@@ -670,7 +682,7 @@ mod tests {
 
     #[test]
     fn repo_configs_present_detects_empty_skill_roots_only_in_project_chain() {
-        for config in [".grok", ".agents", ".claude", ".cursor"] {
+        for config in [".mlx-agent", ".agents", ".claude", ".cursor"] {
             for leaf in ["skills", "commands"] {
                 let tmp = repo_tmp();
                 let repo = tmp.path().join("repo");
@@ -702,10 +714,10 @@ mod tests {
 
     #[test]
     fn repo_configs_present_detects_project_agents() {
-        // A `.grok/agents`-only clone must be gated
+        // A `.mlx-agent/agents`-only clone must be gated
         // A project agent definition can carry an inline `hooks:` block (code-exec) and can shadow a built-in subagent by name
         let tmp = repo_tmp();
-        std::fs::create_dir_all(tmp.path().join(".grok").join("agents")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent").join("agents")).unwrap();
         assert!(repo_configs_present(tmp.path()));
     }
 
@@ -722,7 +734,7 @@ mod tests {
         // Agents live at the git root but the session is launched from a subdir
         // Detection walks from cwd to the git root exactly like agent discovery, so it must still fire (a cwd-only probe would miss it)
         let tmp = repo_tmp();
-        std::fs::create_dir_all(tmp.path().join(".grok").join("agents")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent").join("agents")).unwrap();
         let subdir = tmp.path().join("crates").join("inner");
         std::fs::create_dir_all(&subdir).unwrap();
         assert!(repo_configs_present(&subdir));
@@ -731,7 +743,7 @@ mod tests {
     #[test]
     fn repo_configs_present_detects_project_roles() {
         let tmp = repo_tmp();
-        std::fs::create_dir_all(tmp.path().join(".grok").join("roles")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent").join("roles")).unwrap();
 
         assert!(repo_configs_present(tmp.path()));
         assert!(repo_config_kinds(tmp.path()).contains(&"roles"));
@@ -740,7 +752,7 @@ mod tests {
     #[test]
     fn repo_configs_present_detects_project_personas() {
         let tmp = repo_tmp();
-        std::fs::create_dir_all(tmp.path().join(".grok").join("personas")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent").join("personas")).unwrap();
 
         assert!(repo_configs_present(tmp.path()));
         assert!(repo_config_kinds(tmp.path()).contains(&"personas"));
@@ -769,7 +781,7 @@ mod tests {
     fn project_subagent_marker_symlink_to_directory_is_present() {
         let tmp = repo_tmp();
         let target = tmp.path().join("target-roles");
-        let grok = tmp.path().join(".grok");
+        let grok = tmp.path().join(".mlx-agent");
         std::fs::create_dir_all(&target).unwrap();
         std::fs::create_dir_all(&grok).unwrap();
         std::os::unix::fs::symlink(&target, grok.join("roles")).unwrap();
@@ -789,7 +801,7 @@ mod tests {
     #[test]
     fn repo_configs_present_detects_project_workflows_from_subdir() {
         let tmp = repo_tmp();
-        std::fs::create_dir_all(tmp.path().join(".grok").join("workflows")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent").join("workflows")).unwrap();
         let subdir = tmp.path().join("crates").join("inner");
         std::fs::create_dir_all(&subdir).unwrap();
         assert!(repo_configs_present(&subdir));
@@ -820,14 +832,14 @@ mod tests {
     fn repo_configs_present_detects_project_hooks() {
         // A hooks-only repo (no MCP/LSP configs) must still be gated, so its project hooks don't run ungated when the folder is untrusted
         let tmp = repo_tmp();
-        std::fs::create_dir_all(tmp.path().join(".grok").join("hooks")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent").join("hooks")).unwrap();
         assert!(repo_configs_present(tmp.path()));
     }
 
     #[test]
     fn repo_configs_present_detects_project_hooks_file() {
         let tmp = repo_tmp();
-        let grok = tmp.path().join(".grok");
+        let grok = tmp.path().join(".mlx-agent");
         std::fs::create_dir_all(&grok).unwrap();
         std::fs::write(grok.join("hooks"), "{}").unwrap();
 
@@ -847,7 +859,7 @@ mod tests {
     #[test]
     fn repo_configs_present_detects_dangling_project_hooks_symlink() {
         let tmp = repo_tmp();
-        let grok = tmp.path().join(".grok");
+        let grok = tmp.path().join(".mlx-agent");
         std::fs::create_dir_all(&grok).unwrap();
         std::os::unix::fs::symlink("missing-hooks", grok.join("hooks")).unwrap();
 
@@ -860,7 +872,7 @@ mod tests {
         // Hooks live at the git root but the session is launched from a subdir
         // The gate must still fire because discovery resolves hooks from the root
         let tmp = repo_tmp();
-        std::fs::create_dir_all(tmp.path().join(".grok").join("hooks")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent").join("hooks")).unwrap();
         let subdir = tmp.path().join("crates").join("inner");
         std::fs::create_dir_all(&subdir).unwrap();
         assert!(repo_configs_present(&subdir));
@@ -871,7 +883,7 @@ mod tests {
         // A plugin-only repo (no MCP/LSP/hooks configs) must still be gated
         // Otherwise a project plugin's hooks/MCP would run ungated when the folder is untrusted
         let tmp = repo_tmp();
-        std::fs::create_dir_all(tmp.path().join(".grok").join("plugins").join("x")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent").join("plugins").join("x")).unwrap();
         assert!(repo_configs_present(tmp.path()));
     }
 
@@ -881,7 +893,7 @@ mod tests {
         // Detection walks from cwd to the git root exactly like discover_plugins, so a subdir-only plugin is not a fail-open hole
         let tmp = repo_tmp();
         let subdir = tmp.path().join("packages").join("foo");
-        std::fs::create_dir_all(subdir.join(".grok").join("plugins").join("evil")).unwrap();
+        std::fs::create_dir_all(subdir.join(".mlx-agent").join("plugins").join("evil")).unwrap();
         assert!(repo_configs_present(&subdir));
     }
 
@@ -900,7 +912,7 @@ mod tests {
         // A repo whose ONLY repo-local config is `[plugins].paths` (no plugin dir, no MCP/LSP/hooks) must still be gated
         // Those paths load as auto-trusted ConfigPath plugins, so an ungated clone is a live RCE
         let tmp = repo_tmp();
-        let grok = tmp.path().join(".grok");
+        let grok = tmp.path().join(".mlx-agent");
         std::fs::create_dir_all(&grok).unwrap();
         std::fs::write(grok.join("config.toml"), "[plugins]\npaths = [\"./x\"]\n").unwrap();
         assert!(repo_configs_present(tmp.path()));
@@ -922,7 +934,7 @@ mod tests {
         // Those allow rules auto-approve tool calls, so an ungated clone loads the attacker's policy
         // Also covers subdir launch (the cwd-to-git-root walk)
         let tmp = repo_tmp();
-        let grok = tmp.path().join(".grok");
+        let grok = tmp.path().join(".mlx-agent");
         std::fs::create_dir_all(&grok).unwrap();
         std::fs::write(
             grok.join("config.toml"),
@@ -961,7 +973,7 @@ mod tests {
         // `repo_config_kinds` must agree with the gate, including from a subdir, so the two cannot drift
         // Must report `plugins`, `claude`, and `agents` via their markers
         let tmp = repo_tmp();
-        let grok = tmp.path().join(".grok");
+        let grok = tmp.path().join(".mlx-agent");
         std::fs::create_dir_all(grok.join("agents")).unwrap();
         std::fs::write(grok.join("config.toml"), "[plugins]\npaths = [\"./x\"]\n").unwrap();
         let claude = tmp.path().join(".claude");
@@ -991,6 +1003,80 @@ mod tests {
             repo_configs_present(empty.path()),
             !repo_config_kinds(empty.path()).is_empty(),
             "gate must equal !kinds.is_empty() for an empty repo"
+        );
+    }
+
+    /// Every project marker the gate knows, seeded under one config folder.
+    fn seed_every_project_marker(folder: &Path) {
+        for sub in [
+            "agents",
+            "plugins/x",
+            "hooks",
+            "roles",
+            "personas",
+            "workflows",
+            "rules",
+            "skills/s",
+        ] {
+            std::fs::create_dir_all(folder.join(sub)).unwrap();
+        }
+        std::fs::write(folder.join("lsp.json"), "{}").unwrap();
+        std::fs::write(
+            folder.join("config.toml"),
+            "[mcp_servers.m]\ncommand = \"x\"\n[plugins]\npaths = [\"./x\"]\n[permission]\nallow = [\"Bash(x)\"]\n",
+        )
+        .unwrap();
+    }
+
+    const EVERY_PROJECT_KIND: [&str; 11] = [
+        "mcp",
+        "plugins",
+        "permission",
+        "lsp",
+        "hooks",
+        "agents",
+        "roles",
+        "personas",
+        "workflows",
+        "instructions",
+        "skills",
+    ];
+
+    #[test]
+    fn repo_config_kinds_reads_only_the_agent_folder() {
+        let grok = repo_tmp();
+        seed_every_project_marker(&grok.path().join(".grok"));
+        assert_eq!(
+            repo_config_kinds(grok.path()),
+            Vec::<&str>::new(),
+            "a .grok folder is never a project marker"
+        );
+
+        let mlx = repo_tmp();
+        seed_every_project_marker(&mlx.path().join(".mlx-agent"));
+        let kinds = repo_config_kinds(mlx.path());
+        for expected in EVERY_PROJECT_KIND {
+            assert!(kinds.contains(&expected), "missing {expected:?}: {kinds:?}");
+        }
+    }
+
+    #[test]
+    fn repo_config_kinds_finds_no_project_folder_in_the_home_folder() {
+        let _lock = crate::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let home = dunce::canonicalize(tmp.path()).unwrap().join("home");
+        let agent_home = dunce::canonicalize(tmp.path()).unwrap().join("agent-home");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        seed_every_project_marker(&home.join(".mlx-agent"));
+        let _home = crate::TestEnvGuard::set("HOME", &home);
+        let _userprofile = crate::TestEnvGuard::set("USERPROFILE", &home);
+        let _grok_home = crate::TestEnvGuard::set("GROK_HOME", &agent_home);
+        assert_eq!(
+            repo_config_kinds(&home),
+            Vec::<&str>::new(),
+            "the home folder's .mlx-agent is not a project folder, whatever the agent home is"
         );
     }
 

@@ -171,14 +171,14 @@ mod tests {
         }
     }
 
-    /// Git repo with project `.grok/config.toml` so discovery is bounded to cwd.
+    /// Git repo with project `.mlx-agent/config.toml` so discovery is bounded to cwd.
     fn project_repo(toml: &str) -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
         git2::Repository::init(tmp.path()).unwrap();
         // Pin trust so ambient GROK_CLI_VERSION cannot drop project MCP names.
         crate::agent::folder_trust::record_for_test(tmp.path(), true);
-        std::fs::create_dir_all(tmp.path().join(".grok")).unwrap();
-        std::fs::write(tmp.path().join(".grok").join("config.toml"), toml).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent")).unwrap();
+        std::fs::write(tmp.path().join(".mlx-agent").join("config.toml"), toml).unwrap();
         tmp
     }
 

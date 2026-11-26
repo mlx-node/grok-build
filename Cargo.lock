@@ -13951,6 +13951,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "xai-dirs",
  "xai-grok-config",
  "xai-grok-extra-ca",
  "xai-grok-sandbox",

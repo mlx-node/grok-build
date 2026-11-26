@@ -4617,11 +4617,13 @@ impl MvpAgent {
             if servers.is_empty() {
                 let user_path = xai_grok_tools::util::grok_home::grok_home()
                     .join("lsp.json");
-                let project_path = tool_ctx.cwd.as_path().join(".grok").join("lsp.json");
+                let project_path = xai_grok_tools::implementations::lsp::config::project_lsp_path(
+                    tool_ctx.cwd.as_path(),
+                );
                 tracing::debug!(
                     cwd = %tool_ctx.cwd,
                     user_lsp_path = %user_path.display(),
-                    project_lsp_path = %project_path.display(),
+                    project_lsp_path = ?project_path,
                     "LSP tools enabled, but no language servers are configured"
                 );
             } else {

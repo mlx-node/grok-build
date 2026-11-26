@@ -537,7 +537,7 @@ fn protected_edit_reason(path: &Path) -> Option<ProtectedEditReason> {
 }
 
 /// Grok config files that alter permissions or sandbox restrictions; a silent edit would let the agent loosen its own guardrails.
-/// Matched directly inside any `.grok` dir (user-global default and workspace overlays) and directly under a custom `$GROK_HOME`.
+/// Matched directly inside any `.grok` or `.mlx-agent` dir (user-global default and workspace overlays) and directly under a custom `$GROK_HOME`.
 /// A custom home has no `.grok` component, so the component match alone cannot see it.
 fn protected_grok_config_file(path: &Path, components: &[&str]) -> Option<ProtectedEditReason> {
     protected_grok_config_file_with_home(
@@ -559,7 +559,7 @@ fn protected_grok_config_file_with_home(
         && components.get(components.len() - 3) == Some(&"sessions")
     {
         let n = components.len();
-        let in_dot_grok = n >= 4 && components.get(n - 4) == Some(&".grok");
+        let in_dot_grok = n >= 4 && components.get(n - 4).is_some_and(is_config_dir_name);
         let in_grok_home = grok_home_matches(user_grok_home, |home| {
             path.parent()
                 .and_then(Path::parent)
@@ -576,8 +576,10 @@ fn protected_grok_config_file_with_home(
         xai_grok_config::SANDBOX_CONFIG_FILENAME => ProtectedEditReason::GrokSandbox,
         _ => return None,
     };
-    let in_dot_grok =
-        components.len() >= 2 && components.get(components.len() - 2) == Some(&".grok");
+    let in_dot_grok = components.len() >= 2
+        && components
+            .get(components.len() - 2)
+            .is_some_and(is_config_dir_name);
     let in_grok_home = || grok_home_matches(user_grok_home, |home| path.parent() == Some(home));
     (in_dot_grok || in_grok_home()).then_some(reason)
 }
@@ -597,9 +599,16 @@ fn path_is_under_user_grok_hook_root(path: &Path, grok_home: &Path) -> bool {
     path.starts_with(grok_home.join("hooks")) || path == grok_home.join("hooks-paths")
 }
 
+/// grok-build's `.grok` and the agent's own `.mlx-agent`: both hold config the agent must not loosen silently.
+fn is_config_dir_name(name: &&str) -> bool {
+    *name == ".grok" || *name == xai_dirs::AGENT_DIR_NAME
+}
+
 fn protected_grok_hook_root(path: &Path, components: &[&str]) -> bool {
-    components.windows(2).any(|pair| pair == [".grok", "hooks"])
-        || components.ends_with(&[".grok", "hooks-paths"])
+    components
+        .windows(2)
+        .any(|pair| matches!(pair, [dir, "hooks"] if is_config_dir_name(dir)))
+        || matches!(components, [.., dir, "hooks-paths"] if is_config_dir_name(dir))
         || grok_home_matches(xai_grok_config::user_grok_home().as_deref(), |home| {
             path_is_under_user_grok_hook_root(path, home)
         })
@@ -1576,6 +1585,35 @@ mod tests {
             .join("permission_grok-pager.toml");
         assert_eq!(edit_target_protection(&workspace_grant), None);
         assert!(ProtectedEditReason::Sensitive.description().is_none());
+    }
+
+    #[test]
+    fn the_agent_folder_is_protected_like_grok_builds() {
+        let _home = isolated_home();
+        for path in [
+            "/work/repo/.mlx-agent/config.toml",
+            "/work/repo/.mlx-agent/sandbox.toml",
+            "/work/repo/.mlx-agent/lsp.json",
+            "/work/repo/.mlx-agent/hooks/x.json",
+            "/work/repo/.mlx-agent/hooks-paths",
+            "/work/repo/.mlx-agent/sessions/x/permission.toml",
+            "/work/repo/.grok/config.toml",
+            "/work/repo/.grok/hooks/x.json",
+        ] {
+            assert!(
+                edit_target_protection(Path::new(path)).is_some(),
+                "config edit target must prompt: {path}"
+            );
+        }
+        for path in [
+            "/work/repo/.mlx-agent/notes.md",
+            "/work/repo/.mlx-agent/hooks-disabled/x.json",
+        ] {
+            assert!(
+                edit_target_protection(Path::new(path)).is_none(),
+                "ordinary edit target should not prompt: {path}"
+            );
+        }
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Provisioned-repo listing (`workspace.repos_list`) and the on-disk in-sandbox manifest contract (`{workspace}/.grok/repos.json`).
+//! Provisioned-repo listing (`workspace.repos_list`) and the on-disk in-sandbox manifest contract (`{workspace}/.mlx-agent/repos.json`).
 //!
 //! The sandbox provisioner writes this manifest; the workspace list op reads it.
 //! Field names are the frontend/integration API: add optional fields with `#[serde(default)]` rather than renaming existing ones.
@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use super::{RpcActivityClass, WorkspaceRpc};
 
-/// Relative path of the provisioner manifest from the **sandbox** `workspace_directory` (init root, usually `/workspace`).
+/// File name of the provisioner manifest in the project agent folder of the **sandbox** `workspace_directory` (init root, usually `/workspace`).
 /// It is not relative to the agent / workspace-server `--cwd` after a single-repo rewrite (`/workspace/app`).
-/// Writers and `workspace.repos_list` must join this to that sandbox root.
-pub const REPOS_MANIFEST_RELATIVE_PATH: &str = ".grok/repos.json";
+/// Writers and `workspace.repos_list` must join this to that sandbox root's `xai_dirs::project_agent_dir`.
+pub const REPOS_MANIFEST_FILENAME: &str = "repos.json";
 
 /// Current on-disk / wire manifest version.
 pub const REPOS_MANIFEST_VERSION: u32 = 1;
@@ -80,7 +80,7 @@ impl RepoManifest {
         }
     }
 
-    /// Parse bytes from `{workspace}/.grok/repos.json`.
+    /// Parse bytes from `{workspace}/.mlx-agent/repos.json`.
     pub fn from_json_bytes(bytes: &[u8]) -> Result<Self, serde_json::Error> {
         serde_json::from_slice(bytes)
     }
@@ -99,7 +99,7 @@ impl RepoManifest {
                 continue;
             }
             let mount = std::path::PathBuf::from(raw);
-            // Confine to the workspace: a malicious `.grok/repos.json` must not point walks outside it
+            // Confine to the workspace: a malicious `.mlx-agent/repos.json` must not point walks outside it
             // Reject `..` and any mount not under `workspace_root`, matching `unnamed_cwd` / `confine_mount_under_workspace`
             if mount
                 .components()

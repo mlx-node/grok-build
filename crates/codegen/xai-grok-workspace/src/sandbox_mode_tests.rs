@@ -90,7 +90,7 @@ fn workspace_grok_workspaced_toml_cannot_lower_the_user_file() {
     let home = tmp.path().join("home");
     let ws = tmp.path().join("ws");
     write_sandbox_table(&home, "workspaced.toml", "enforce");
-    write_sandbox_table(&ws, ".grok/workspaced.toml", "off");
+    write_sandbox_table(&ws, ".mlx-agent/workspaced.toml", "off");
     let resolved = resolve(&ws, &home, None);
     assert_eq!(SandboxMode::Enforce, resolved.mode);
     assert_eq!(SandboxModeSource::UserConfig, resolved.source);
@@ -102,7 +102,7 @@ fn workspace_grok_workspaced_toml_tightens_the_user_file() {
     let home = tmp.path().join("home");
     let ws = tmp.path().join("ws");
     write_sandbox_table(&home, "workspaced.toml", "observe");
-    write_sandbox_table(&ws, ".grok/workspaced.toml", "enforce");
+    write_sandbox_table(&ws, ".mlx-agent/workspaced.toml", "enforce");
     let resolved = resolve(&ws, &home, None);
     assert_eq!(SandboxMode::Enforce, resolved.mode);
     assert_eq!(SandboxModeSource::WorkspaceConfig, resolved.source);
@@ -110,14 +110,14 @@ fn workspace_grok_workspaced_toml_tightens_the_user_file() {
 
 /// The workspace layer is read whether or not the folder is trusted: it can only tighten. A
 /// checkout whose own `.envrc` makes it untrusted (a repo-local config with no recorded trust
-/// grant) still gets the `enforce` its `.grok/workspaced.toml` asks for; gated on trust, that
+/// grant) still gets the `enforce` its `.mlx-agent/workspaced.toml` asks for; gated on trust, that
 /// file would drop the mode to the user's default.
 #[test]
 fn an_untrusted_folder_still_tightens_through_its_workspace_file() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     let ws = tmp.path().join("ws");
-    write_sandbox_table(&ws, ".grok/workspaced.toml", "enforce");
+    write_sandbox_table(&ws, ".mlx-agent/workspaced.toml", "enforce");
     std::fs::write(ws.join(".envrc"), "export FOO=1\n").unwrap();
     let trust = folder_trust::decide_inputs_with_interactive(&ws, &workspace_key(&ws), false);
     assert_eq!(
@@ -136,7 +136,7 @@ fn remote_rollout_switch_beats_the_user_file_and_the_workspace() {
     let home = tmp.path().join("home");
     let ws = tmp.path().join("ws");
     write_sandbox_table(&home, "workspaced.toml", "enforce");
-    write_sandbox_table(&ws, ".grok/workspaced.toml", "enforce");
+    write_sandbox_table(&ws, ".mlx-agent/workspaced.toml", "enforce");
     let remote = RemoteSettings {
         sandbox_mode: Some(SandboxMode::Observe),
         ..RemoteSettings::default()
@@ -200,7 +200,7 @@ fn env_value_overrides_every_file() {
     let home = tmp.path().join("home");
     let ws = tmp.path().join("ws");
     write_sandbox_table(&home, "workspaced.toml", "off");
-    write_sandbox_table(&ws, ".grok/workspaced.toml", "off");
+    write_sandbox_table(&ws, ".mlx-agent/workspaced.toml", "off");
     let resolved = resolve(&ws, &home, Some("enforce"));
     assert_eq!(SandboxMode::Enforce, resolved.mode);
     assert_eq!(SandboxModeSource::Env, resolved.source);
@@ -214,7 +214,7 @@ fn a_malformed_workspace_file_is_the_strictest_mode() {
     let home = tmp.path().join("home");
     let ws = tmp.path().join("ws");
     write_sandbox_table(&home, "workspaced.toml", "observe");
-    let broken = ws.join(".grok").join("workspaced.toml");
+    let broken = ws.join(".mlx-agent").join("workspaced.toml");
     std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
     std::fs::write(&broken, "[sandbox\nmode = ").unwrap();
     assert_eq!(
@@ -256,7 +256,7 @@ fn the_cli_config_toml_is_never_read() {
     let home = tmp.path().join("home");
     let ws = tmp.path().join("ws");
     write_sandbox_table(&home, "config.toml", "enforce");
-    write_sandbox_table(&ws, ".grok/config.toml", "enforce");
+    write_sandbox_table(&ws, ".mlx-agent/config.toml", "enforce");
     let resolved = resolve(&ws, &home, None);
     assert_eq!(SandboxMode::Off, resolved.mode);
     assert_eq!(SandboxModeSource::Default, resolved.source);
@@ -265,12 +265,15 @@ fn the_cli_config_toml_is_never_read() {
 #[test]
 fn the_layer_files_are_workspaced_toml_under_the_home_and_the_folder() {
     assert_eq!(
-        Path::new("/opt/ws-fixture/me/.grok/workspaced.toml"),
-        super::user_config_path(Path::new("/opt/ws-fixture/me/.grok"))
+        Path::new("/opt/ws-fixture/me/.mlx-agent/workspaced.toml"),
+        super::user_config_path(Path::new("/opt/ws-fixture/me/.mlx-agent"))
     );
     assert_eq!(
-        Path::new("/opt/ws-fixture/me/proj/.grok/workspaced.toml"),
-        super::workspace_config_path(Path::new("/opt/ws-fixture/me/proj"))
+        Some(Path::new("/opt/ws-fixture/me/proj/.mlx-agent/workspaced.toml").to_path_buf()),
+        super::workspace_config_path(
+            Path::new("/opt/ws-fixture/me/proj"),
+            Path::new("/opt/ws-fixture/me/.mlx-agent")
+        )
     );
 }
 
@@ -280,7 +283,7 @@ fn write_creates_the_workspace_file_and_the_layer_reads_it_back() {
     let ws = tmp.path().join("ws");
     std::fs::create_dir_all(&ws).unwrap();
     let path = write_workspace_sandbox_mode(&ws, SandboxMode::Enforce).unwrap();
-    assert_eq!(ws.join(".grok").join("workspaced.toml"), path);
+    assert_eq!(ws.join(".mlx-agent").join("workspaced.toml"), path);
     let resolved = resolve(&ws, &tmp.path().join("home"), None);
     assert_eq!(SandboxMode::Enforce, resolved.mode);
     assert_eq!(SandboxModeSource::WorkspaceConfig, resolved.source);
@@ -289,7 +292,7 @@ fn write_creates_the_workspace_file_and_the_layer_reads_it_back() {
 /// `sandbox.mode.set` as one step: the write, then the layers read again, so the answer is the
 /// mode the folder is in now — `off` asked under a user layer of `observe` answers `observe` from
 /// the user file, since the workspace layer only tightens. A root that is not a directory is
-/// refused before anything is written: the write may create `.grok/`, never the folder.
+/// refused before anything is written: the write may create `.mlx-agent/`, never the folder.
 #[test]
 fn set_workspace_mode_writes_then_answers_with_the_mode_the_layers_resolve_to() {
     let tmp = tempfile::tempdir().unwrap();
@@ -305,7 +308,7 @@ fn set_workspace_mode_writes_then_answers_with_the_mode_the_layers_resolve_to() 
         writable: &WritableLocations::default(),
     };
     let (path, resolved) = set_workspace_mode_in(SandboxMode::Off, inputs).unwrap();
-    assert_eq!(ws.join(".grok").join("workspaced.toml"), path);
+    assert_eq!(ws.join(".mlx-agent").join("workspaced.toml"), path);
     assert_eq!(SandboxMode::Observe, resolved.mode);
     assert_eq!(SandboxModeSource::UserConfig, resolved.source);
     let (_, resolved) = set_workspace_mode_in(SandboxMode::Enforce, inputs).unwrap();
@@ -335,7 +338,7 @@ fn set_workspace_mode_writes_then_answers_with_the_mode_the_layers_resolve_to() 
 fn write_refuses_the_home_folder_whose_workspace_file_is_the_user_layer() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
-    let grok_home = home.join(".grok");
+    let grok_home = home.join(".mlx-agent");
     std::fs::create_dir_all(&grok_home).unwrap();
     for spelling in [home.clone(), home.join("proj/..")] {
         let error = super::write_workspace_sandbox_mode_in(&spelling, &grok_home, SandboxMode::Off)
@@ -362,7 +365,7 @@ fn write_refuses_a_root_relinked_to_the_home_folder_after_the_check() {
         tmp.path().join("proj"),
         tmp.path().join("root"),
     );
-    let grok_home = home.join(".grok");
+    let grok_home = home.join(".mlx-agent");
     for dir in [&grok_home, &proj] {
         std::fs::create_dir_all(dir).unwrap();
     }
@@ -382,10 +385,10 @@ fn write_refuses_a_root_relinked_to_the_home_folder_after_the_check() {
     std::fs::remove_file(&root).unwrap();
     std::os::unix::fs::symlink(&proj, &root).unwrap();
     super::write_workspace_sandbox_mode_in(&root, &grok_home, SandboxMode::Off).unwrap();
-    assert!(proj.join(".grok/workspaced.toml").exists());
+    assert!(proj.join(".mlx-agent/workspaced.toml").exists());
 }
 
-/// On APFS a grok home spelled `.Grok` that does not exist yet is the home folder's `.grok`.
+/// On APFS a grok home spelled `.MLX-Agent` that does not exist yet is the home folder's `.mlx-agent`.
 #[cfg(target_os = "macos")]
 #[test]
 fn write_refuses_the_home_folder_when_the_missing_grok_home_differs_only_in_case() {
@@ -393,20 +396,20 @@ fn write_refuses_the_home_folder_when_the_missing_grok_home_differs_only_in_case
     let home = tmp.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
     let error =
-        super::write_workspace_sandbox_mode_in(&home, &home.join(".Grok"), SandboxMode::Off)
+        super::write_workspace_sandbox_mode_in(&home, &home.join(".MLX-Agent"), SandboxMode::Off)
             .unwrap_err();
     assert!(
         matches!(error, super::SandboxModeWriteError::UserLayer { .. }),
         "{error}"
     );
-    assert!(!home.join(".grok").exists());
+    assert!(!home.join(".mlx-agent").exists());
 }
 
 #[test]
 fn write_keeps_other_keys_comments_and_replaces_an_existing_mode() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().join("ws");
-    let path = ws.join(".grok").join("workspaced.toml");
+    let path = ws.join(".mlx-agent").join("workspaced.toml");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(
         &path,
@@ -426,7 +429,7 @@ fn write_keeps_other_keys_comments_and_replaces_an_existing_mode() {
     );
 }
 
-/// Writers of one folder's file take turns on its `.grok` directory: one behind a lock held there
+/// Writers of one folder's file take turns on its `.mlx-agent` directory: one behind a lock held there
 /// fails after a bounded wait with the file untouched, and concurrent writers all succeed and
 /// leave the file holding one of their modes, never removed as a swapped-in file.
 #[cfg(unix)]
@@ -437,7 +440,7 @@ fn concurrent_mode_writers_take_turns_and_the_file_survives() {
     std::fs::create_dir_all(&ws).unwrap();
     let write = |mode| super::write_workspace_sandbox_mode_in(&ws, &grok_home, mode);
     let path = write(SandboxMode::Observe).unwrap();
-    let holder = std::fs::File::open(ws.join(".grok")).unwrap();
+    let holder = std::fs::File::open(ws.join(".mlx-agent")).unwrap();
     fs2::FileExt::lock_exclusive(&holder).unwrap();
     let started = std::time::Instant::now();
     let held = write(SandboxMode::Enforce).unwrap_err();
@@ -476,7 +479,7 @@ fn concurrent_mode_writers_take_turns_and_the_file_survives() {
 fn write_refuses_a_file_that_is_not_toml_and_a_non_table_sandbox_key() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().join("ws");
-    let path = ws.join(".grok").join("workspaced.toml");
+    let path = ws.join(".mlx-agent").join("workspaced.toml");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, "[sandbox\nmode = ").unwrap();
     let error = write_workspace_sandbox_mode(&ws, SandboxMode::Off).unwrap_err();
@@ -496,7 +499,7 @@ fn an_oversized_workspace_file_is_the_strictest_mode_and_never_rewritten() {
     let home = tmp.path().join("home");
     let ws = tmp.path().join("ws");
     write_sandbox_table(&home, "workspaced.toml", "observe");
-    let path = ws.join(".grok").join("workspaced.toml");
+    let path = ws.join(".mlx-agent").join("workspaced.toml");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let padding = "#".repeat(usize::try_from(super::MAX_WORKSPACED_TOML_BYTES).unwrap());
     let contents = format!("[sandbox]\nmode = \"enforce\"\n{padding}\n");
@@ -530,7 +533,7 @@ fn env_references_in_a_layer_are_not_expanded() {
         "$PATH",
         "${HOME}",
     ] {
-        write_sandbox_table(&ws, ".grok/workspaced.toml", reference);
+        write_sandbox_table(&ws, ".mlx-agent/workspaced.toml", reference);
         let resolved = resolve(&ws, &home, None);
         assert_eq!(SandboxMode::Observe, resolved.mode, "{reference}");
         assert_eq!(
@@ -549,7 +552,7 @@ fn an_invalid_mode_is_logged_without_its_text() {
     let home = tmp.path().join("home");
     let ws = tmp.path().join("ws");
     let secret = "hunter2-not-a-mode";
-    write_sandbox_table(&ws, ".grok/workspaced.toml", secret);
+    write_sandbox_table(&ws, ".mlx-agent/workspaced.toml", secret);
     let (resolved, log) = crate::capturing_warn_logs(|| resolve(&ws, &home, None));
     assert_eq!(SandboxMode::Off, resolved.mode);
     assert_eq!(SandboxModeSource::Default, resolved.source);
@@ -568,7 +571,7 @@ fn a_fifo_in_the_workspace_files_place_does_not_stall_the_resolver_or_the_writer
     let home = tmp.path().join("home");
     let ws = tmp.path().join("ws");
     write_sandbox_table(&home, "workspaced.toml", "observe");
-    let path = ws.join(".grok").join("workspaced.toml");
+    let path = ws.join(".mlx-agent").join("workspaced.toml");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let fifo = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
     // SAFETY: `fifo` is a valid NUL-terminated path and `mkfifo` reads nothing else.
@@ -603,8 +606,8 @@ fn a_fifo_in_the_workspace_files_place_does_not_stall_the_resolver_or_the_writer
 /// tree, a folder a grant opened, another served folder, the sessions tree — is refused, so it
 /// is the strictest mode with one warning: a command there could rewrite the mode. When the
 /// grants cannot be read, where a command may write is unknown and the link is refused too.
-/// `sandbox.mode.set` never writes through a link, at the file or at `.grok`, wherever it points:
-/// the link and its target stay as they were. A planted `.grok`, or a grok home, linking into
+/// `sandbox.mode.set` never writes through a link, at the file or at `.mlx-agent`, wherever it points:
+/// the link and its target stay as they were. A planted `.mlx-agent`, or a grok home, linking into
 /// the workspace or a build-cache tree is refused the same way.
 #[cfg(unix)]
 #[test]
@@ -664,7 +667,7 @@ fn a_link_into_a_place_a_command_may_write_is_the_strictest_mode() {
 
     let target = ws.join("planted/off.toml");
     write_sandbox_table(&ws, "planted/off.toml", "off");
-    let ws_layer = ws.join(".grok").join("workspaced.toml");
+    let ws_layer = ws.join(".mlx-agent").join("workspaced.toml");
     std::fs::create_dir_all(ws_layer.parent().unwrap()).unwrap();
     std::os::unix::fs::symlink(&target, &ws_layer).unwrap();
     assert_eq!(
@@ -683,15 +686,15 @@ fn a_link_into_a_place_a_command_may_write_is_the_strictest_mode() {
             .is_symlink()
     );
 
-    std::fs::remove_dir_all(ws.join(".grok")).unwrap();
+    std::fs::remove_dir_all(ws.join(".mlx-agent")).unwrap();
     let dotfile = tmp.path().join("dotfiles/grok/workspaced.toml");
     write_sandbox_table(tmp.path(), "dotfiles/grok/workspaced.toml", "enforce");
-    std::os::unix::fs::symlink(dotfile.parent().unwrap(), ws.join(".grok")).unwrap();
+    std::os::unix::fs::symlink(dotfile.parent().unwrap(), ws.join(".mlx-agent")).unwrap();
     let before = std::fs::read(&dotfile).unwrap();
     let error = super::write_workspace_sandbox_mode_in(&ws, &home, SandboxMode::Off).unwrap_err();
     assert!(error.to_string().contains("is a symlink"), "{error}");
     assert_eq!(before, std::fs::read(&dotfile).unwrap());
-    std::fs::remove_file(ws.join(".grok")).unwrap();
+    std::fs::remove_file(ws.join(".mlx-agent")).unwrap();
 
     let linked_home = tmp.path().join("linked-home");
     std::os::unix::fs::symlink(ws.join("planted-home"), &linked_home).unwrap();
@@ -703,19 +706,19 @@ fn a_link_into_a_place_a_command_may_write_is_the_strictest_mode() {
     assert!(log.contains("where a sandboxed command may write"), "{log}");
     for place in [ws.join("planted"), user_home.join(".cargo/registry/grok")] {
         write_sandbox_table(&place, "workspaced.toml", "off");
-        std::os::unix::fs::symlink(&place, ws.join(".grok")).unwrap();
+        std::os::unix::fs::symlink(&place, ws.join(".mlx-agent")).unwrap();
         let (resolved, log) = crate::capturing_warn_logs(|| resolve_in(&ws, &home, &writable));
         let shown = place.display();
         let expected = strictest(SandboxMode::Enforce, SandboxModeSource::WorkspaceConfig);
         assert_eq!(expected, resolved, "{shown}");
         assert!(log.contains("where a sandboxed command may write"), "{log}");
-        std::fs::remove_file(ws.join(".grok")).unwrap();
+        std::fs::remove_file(ws.join(".mlx-agent")).unwrap();
     }
 }
 
 /// A layer refused or unreadable (a directory or dangling link in its place, not TOML or UTF-8) is
 /// `enforce`, warned once, `degraded: config_refused` (no backend: the readable layers', marked),
-/// never `off`; absent again once gone, or when `.grok` is a file or a link to one.
+/// never `off`; absent again once gone, or when `.mlx-agent` is a file or a link to one.
 #[cfg(unix)]
 #[test]
 fn a_refused_or_unreadable_layer_is_the_strictest_mode_with_one_warning() {
@@ -768,7 +771,7 @@ fn a_refused_or_unreadable_layer_is_the_strictest_mode_with_one_warning() {
     assert!(log.contains("not valid TOML"), "{log}");
 
     write_sandbox_table(&home, "workspaced.toml", "observe");
-    let ws_layer = ws.join(".grok").join("workspaced.toml");
+    let ws_layer = ws.join(".mlx-agent").join("workspaced.toml");
     std::fs::create_dir_all(ws_layer.parent().unwrap()).unwrap();
     std::fs::write(&ws_layer, b"[sandbox]\nmode = \"off\" # \xff\n").unwrap();
     for (backend_available, mode) in [(true, SandboxMode::Enforce), (false, SandboxMode::Observe)] {
@@ -782,14 +785,14 @@ fn a_refused_or_unreadable_layer_is_the_strictest_mode_with_one_warning() {
         assert_eq!(1, log.matches("is refused, not read").count(), "{log}");
     }
 
-    std::fs::remove_dir_all(ws.join(".grok")).unwrap();
+    std::fs::remove_dir_all(ws.join(".mlx-agent")).unwrap();
     let file = tmp.path().join("not-settings");
     std::fs::write(&file, "a file, not the folder's settings").unwrap();
     for linked in [false, true] {
         if linked {
-            std::os::unix::fs::symlink(&file, ws.join(".grok")).unwrap();
+            std::os::unix::fs::symlink(&file, ws.join(".mlx-agent")).unwrap();
         } else {
-            std::fs::copy(&file, ws.join(".grok")).unwrap();
+            std::fs::copy(&file, ws.join(".mlx-agent")).unwrap();
         }
         for backend_available in [true, false] {
             let (resolved, log) = crate::capturing_warn_logs(|| {
@@ -802,7 +805,7 @@ fn a_refused_or_unreadable_layer_is_the_strictest_mode_with_one_warning() {
             );
             assert_eq!("", log);
         }
-        std::fs::remove_file(ws.join(".grok")).unwrap();
+        std::fs::remove_file(ws.join(".mlx-agent")).unwrap();
     }
     std::fs::remove_file(&layer).unwrap();
     assert_eq!(
@@ -822,7 +825,7 @@ fn a_refused_layer_never_lowers_or_ties_a_readable_enforce() {
     let home = tmp.path().join("home");
     let ws = tmp.path().join("ws");
     let user_layer = home.join("workspaced.toml");
-    let ws_layer = ws.join(".grok").join("workspaced.toml");
+    let ws_layer = ws.join(".mlx-agent").join("workspaced.toml");
     let place = |path: &Path, state: &str| {
         if let Ok(metadata) = std::fs::symlink_metadata(path) {
             if metadata.is_dir() {
@@ -911,7 +914,7 @@ fn a_dotfile_link_outside_every_writable_place_is_read() {
     assert!(!log.contains("refused"), "{log}");
 
     write_sandbox_table(&user_home, "dotfiles/grok/enforce.toml", "enforce");
-    let ws_layer = ws.join(".grok").join("workspaced.toml");
+    let ws_layer = ws.join(".mlx-agent").join("workspaced.toml");
     std::fs::create_dir_all(ws_layer.parent().unwrap()).unwrap();
     std::os::unix::fs::symlink(user_home.join("dotfiles/grok/enforce.toml"), &ws_layer).unwrap();
     assert_eq!(
@@ -922,22 +925,22 @@ fn a_dotfile_link_outside_every_writable_place_is_read() {
 
     let enforce =
         ResolvedSandboxMode::new(SandboxMode::Enforce, SandboxModeSource::WorkspaceConfig);
-    write_sandbox_table(&ws, ".grok/workspaced.toml", "enforce");
+    write_sandbox_table(&ws, ".mlx-agent/workspaced.toml", "enforce");
     std::os::unix::fs::symlink(&ws, tmp.path().join("ws-link")).unwrap();
     assert_eq!(
         enforce,
         resolve_in(&tmp.path().join("ws-link"), &home, &writable)
     );
-    std::fs::remove_dir_all(ws.join(".grok")).unwrap();
+    std::fs::remove_dir_all(ws.join(".mlx-agent")).unwrap();
     write_sandbox_table(&user_home, "dotfiles/grok/workspaced.toml", "enforce");
-    std::os::unix::fs::symlink(user_home.join(".dotfiles/grok"), ws.join(".grok")).unwrap();
+    std::os::unix::fs::symlink(user_home.join(".dotfiles/grok"), ws.join(".mlx-agent")).unwrap();
     assert_eq!(enforce, resolve_in(&ws, &home, &writable));
     std::fs::remove_file(user_home.join("dotfiles/grok/workspaced.toml")).unwrap();
     assert_eq!(
         ResolvedSandboxMode::new(SandboxMode::Observe, SandboxModeSource::UserConfig),
         resolve_in(&ws, &home, &writable)
     );
-    std::fs::remove_file(ws.join(".grok")).unwrap();
+    std::fs::remove_file(ws.join(".mlx-agent")).unwrap();
 
     let fifo_path = user_home.join("dotfiles/grok/fifo.toml");
     let fifo = std::ffi::CString::new(fifo_path.as_os_str().as_encoded_bytes()).unwrap();
@@ -964,12 +967,12 @@ fn a_dotfile_link_outside_every_writable_place_is_read() {
 fn write_leaves_the_cli_config_toml_alone() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().join("ws");
-    let cli = ws.join(".grok").join("config.toml");
+    let cli = ws.join(".mlx-agent").join("config.toml");
     std::fs::create_dir_all(cli.parent().unwrap()).unwrap();
     let cli_text = "[sandbox]\nprofile = \"workspace\"\n";
     std::fs::write(&cli, cli_text).unwrap();
     let path = write_workspace_sandbox_mode(&ws, SandboxMode::Enforce).unwrap();
-    assert_eq!(ws.join(".grok").join("workspaced.toml"), path);
+    assert_eq!(ws.join(".mlx-agent").join("workspaced.toml"), path);
     assert_eq!(cli_text, std::fs::read_to_string(&cli).unwrap());
     assert_eq!(
         "[sandbox]\nmode = \"enforce\"\n",

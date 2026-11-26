@@ -134,10 +134,13 @@ pub fn discover_plugins(
         .collect()
 }
 
-/// Load project config from `<root_cwd>/.grok/config.toml`.
-/// Missing or unparseable files return `Value::Null`; non-fatal errors are logged.
+/// Load project config from `<root_cwd>/.mlx-agent/config.toml`.
+/// Missing or unparseable files, and a root with no project agent folder, return `Value::Null`; non-fatal errors are logged.
 pub fn load_project_config(root_cwd: &Path) -> Value {
-    let config_path = root_cwd.join(".grok").join("config.toml");
+    let Some(folder) = xai_dirs::project_agent_dir(root_cwd) else {
+        return Value::Null;
+    };
+    let config_path = folder.join("config.toml");
     match xai_grok_config::load_config_file(&config_path) {
         Ok(toml::Value::Table(ref t)) if t.is_empty() => {
             // The config loader returns an empty table when the file does not exist
@@ -225,7 +228,11 @@ mod tests {
     #[tokio::test]
     async fn discover_skills_finds_skill_md() {
         let tmp = tempfile::tempdir().unwrap();
-        let skills_dir = tmp.path().join(".grok").join("skills").join("my-skill");
+        let skills_dir = tmp
+            .path()
+            .join(".mlx-agent")
+            .join("skills")
+            .join("my-skill");
         fs::create_dir_all(&skills_dir).unwrap();
         fs::write(
             skills_dir.join("SKILL.md"),
@@ -283,7 +290,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let skills_dir = tmp
             .path()
-            .join(".grok")
+            .join(".mlx-agent")
             .join("skills")
             .join("serialized-check");
         fs::create_dir_all(&skills_dir).unwrap();
@@ -409,7 +416,11 @@ mod tests {
     #[test]
     fn discover_plugins_finds_manifest_plugin() {
         let tmp = tempfile::tempdir().unwrap();
-        let plugins_dir = tmp.path().join(".grok").join("plugins").join("test-plugin");
+        let plugins_dir = tmp
+            .path()
+            .join(".mlx-agent")
+            .join("plugins")
+            .join("test-plugin");
         fs::create_dir_all(&plugins_dir).unwrap();
         fs::write(
             plugins_dir.join("plugin.json"),
@@ -434,7 +445,11 @@ mod tests {
     #[test]
     fn discover_plugins_json_has_expected_fields() {
         let tmp = tempfile::tempdir().unwrap();
-        let plugins_dir = tmp.path().join(".grok").join("plugins").join("field-test");
+        let plugins_dir = tmp
+            .path()
+            .join(".mlx-agent")
+            .join("plugins")
+            .join("field-test");
         fs::create_dir_all(plugins_dir.join("skills")).unwrap();
         fs::write(
             plugins_dir.join("plugin.json"),
@@ -472,9 +487,27 @@ mod tests {
     }
 
     #[test]
+    fn load_project_config_reads_only_the_agent_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join(".grok")).unwrap();
+        fs::write(tmp.path().join(".grok/config.toml"), "grokmark = true\n").unwrap();
+        assert!(load_project_config(tmp.path()).is_null());
+
+        fs::create_dir_all(tmp.path().join(".mlx-agent")).unwrap();
+        fs::write(
+            tmp.path().join(".mlx-agent/config.toml"),
+            "mlxmark = true\n",
+        )
+        .unwrap();
+        let config = load_project_config(tmp.path());
+        assert_eq!(config.pointer("/mlxmark"), Some(&Value::Bool(true)));
+        assert_eq!(config.pointer("/grokmark"), None);
+    }
+
+    #[test]
     fn load_project_config_reads_toml_as_json() {
         let tmp = tempfile::tempdir().unwrap();
-        let grok_dir = tmp.path().join(".grok");
+        let grok_dir = tmp.path().join(".mlx-agent");
         fs::create_dir_all(&grok_dir).unwrap();
         fs::write(
             grok_dir.join("config.toml"),

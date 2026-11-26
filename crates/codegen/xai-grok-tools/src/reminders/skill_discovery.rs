@@ -1,7 +1,7 @@
 //! Skill discovery reminder — discovers new skills near accessed paths.
 //!
 //! Contains `SkillDiscoveryReminder`, a cross-cutting `Reminder` that fires
-//! after every tool call to check for SKILL.md files in `.grok/skills/`,
+//! after every tool call to check for SKILL.md files in `.mlx-agent/skills/`,
 //! `.agents/skills/`, or `.claude/skills/` directories near the accessed path.
 //!
 //! The actual tracking logic lives in
@@ -9,10 +9,9 @@
 
 use std::path::{Path, PathBuf};
 
-/// Directories that contain skill definitions (`.grok/skills/`, `.agents/skills/`,
-/// `.claude/skills/`, `.cursor/skills/`). Shared between startup skill discovery
-/// and runtime `SkillDiscoveryReminder`.
-pub const SKILL_CONFIG_DIRS: &[&str] = &[".grok", ".agents", ".claude", ".cursor"];
+/// Vendor directories that contain skill definitions (`.agents/skills/`,
+/// `.claude/skills/`, `.cursor/skills/`), beside the agent folder's `.mlx-agent/skills/`.
+pub const SKILL_CONFIG_DIRS: &[&str] = &[".agents", ".claude", ".cursor"];
 
 use crate::implementations::skills::discovery;
 use crate::implementations::skills::types::SkillScope;
@@ -62,17 +61,38 @@ impl SkillDiscoveryReminder {
     }
 
     /// Check whether a SKILL.md path is inside a supported skills directory
-    /// (`.grok/skills/`, `.agents/skills/`, or `.claude/skills/`).
+    /// (`.mlx-agent/skills/`, `.agents/skills/`, `.claude/skills/` or `.cursor/skills/`).
     fn is_in_supported_skills_dir(path: &Path) -> bool {
         for ancestor in path.ancestors().skip(1) {
             if ancestor.file_name().is_some_and(|n| n == "skills") {
                 return ancestor
                     .parent()
                     .and_then(|p| p.file_name())
-                    .is_some_and(|n| SKILL_CONFIG_DIRS.iter().any(|d| *d == n));
+                    .is_some_and(|n| {
+                        xai_dirs::is_agent_dir_name(n) || SKILL_CONFIG_DIRS.iter().any(|d| *d == n)
+                    });
             }
         }
         false
+    }
+}
+
+impl SkillDiscoveryReminder {
+    /// A SKILL.md under the agent home is User scope even when the cwd is the home folder.
+    fn scope_for_skill_md(
+        target_path: &Path,
+        cwd: Option<&Path>,
+        git_root: Option<&Path>,
+        agent_home: Option<&Path>,
+    ) -> SkillScope {
+        if agent_home.is_some_and(|home| target_path.starts_with(home)) {
+            return SkillScope::User;
+        }
+        match (cwd, git_root) {
+            (Some(cwd), _) if target_path.starts_with(cwd) => SkillScope::Local,
+            (_, Some(root)) if target_path.starts_with(root) => SkillScope::Repo,
+            _ => SkillScope::User,
+        }
     }
 }
 
@@ -111,21 +131,20 @@ impl Reminder for SkillDiscoveryReminder {
         };
 
         // Direct SKILL.md detection: when a tool writes (or reads) a SKILL.md file, register it immediately. The normal
-        // upward-walk discovery cannot find these because it looks for `.grok/skills/` sub-directories in *ancestor* dirs, and
-        // user-scope skills (~/.grok/) are outside the git root so the walk breaks early.
+        // upward-walk discovery cannot find these because it looks for `.mlx-agent/skills/` sub-directories in *ancestor* dirs, and
+        // user-scope skills (the agent home) are outside the git root so the walk breaks early.
         if target_path.file_name().is_some_and(|n| n == "SKILL.md")
             && Self::is_in_supported_skills_dir(target_path)
         {
             let scope = {
                 let res = resources.lock().await;
                 let tracker = res.get::<SkillManager>();
-                let cwd = tracker.and_then(|m| m.cwd.clone());
-                let git_root = tracker.and_then(|m| m.git_root.clone());
-                match (cwd, git_root) {
-                    (Some(cwd), _) if target_path.starts_with(&cwd) => SkillScope::Local,
-                    (_, Some(root)) if target_path.starts_with(&root) => SkillScope::Repo,
-                    _ => SkillScope::User,
-                }
+                Self::scope_for_skill_md(
+                    target_path,
+                    tracker.and_then(|m| m.cwd.as_deref()),
+                    tracker.and_then(|m| m.git_root.as_deref()),
+                    xai_dirs::resolve_grok_home().as_deref(),
+                )
             };
             let skills = discovery::parse_skill_files(vec![(target_path.to_path_buf(), scope)]);
             if !skills.is_empty() {
@@ -212,6 +231,50 @@ mod tests {
             new_text: String::new(),
             move_to: move_to.map(PathBuf::from),
         }
+    }
+
+    #[test]
+    fn skill_md_is_supported_only_in_the_agent_folder_and_vendor_dirs() {
+        for path in [
+            "/h/proj/.mlx-agent/skills/y/SKILL.md",
+            "/h/.mlx-agent/skills/x/SKILL.md",
+            "/h/proj/.claude/skills/y/SKILL.md",
+        ] {
+            assert!(
+                SkillDiscoveryReminder::is_in_supported_skills_dir(Path::new(path)),
+                "{path}"
+            );
+        }
+        for path in [
+            "/h/.grok/skills/x/SKILL.md",
+            "/h/proj/.grok/skills/y/SKILL.md",
+        ] {
+            assert!(
+                !SkillDiscoveryReminder::is_in_supported_skills_dir(Path::new(path)),
+                "a .grok skill is never registered: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_skill_under_the_agent_home_is_user_scope_even_from_the_home_folder() {
+        let home = Path::new("/h");
+        let agent_home = home.join(".mlx-agent");
+        let skill = agent_home.join("skills/x/SKILL.md");
+        assert_eq!(
+            SkillDiscoveryReminder::scope_for_skill_md(&skill, Some(home), None, Some(&agent_home)),
+            SkillScope::User
+        );
+        let local = home.join("proj/.mlx-agent/skills/y/SKILL.md");
+        assert_eq!(
+            SkillDiscoveryReminder::scope_for_skill_md(
+                &local,
+                Some(&home.join("proj")),
+                None,
+                Some(&agent_home)
+            ),
+            SkillScope::Local
+        );
     }
 
     #[test]

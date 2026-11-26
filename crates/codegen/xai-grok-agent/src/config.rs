@@ -1,4 +1,4 @@
-//! Agent definition types, parsed from `.grok/agents/*.md` files.
+//! Agent definition types, parsed from `.mlx-agent/agents/*.md` files.
 use crate::error::AgentBuildError;
 use crate::prompt::context::TemplateOverride;
 use crate::prompt::user_message::UserMessageTemplate;
@@ -689,7 +689,7 @@ impl BuiltinAgentName {
         &[Self::GeneralPurpose, Self::Explore, Self::Plan]
     }
 }
-/// Portable agent identity, parsed from .grok/agents/*.md. Usable as a top-level agent or a subagent.
+/// Portable agent identity, parsed from .mlx-agent/agents/*.md. Usable as a top-level agent or a subagent.
 /// Does not contain session-level policies; those are provided by the AgentBuilder at build time.
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -839,7 +839,7 @@ fn default_prompt_mode() -> PromptMode {
 /// Where the agent definition was discovered.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AgentScope {
-    /// .grok/agents/ (project-level, highest priority)
+    /// .mlx-agent/agents/ (project-level, highest priority)
     Project,
     /// ~/.grok/agents/ (user-level)
     User,
@@ -1294,7 +1294,6 @@ impl AgentDefinition {
         Ok(def)
     }
     fn scope_from_path(path: &Path) -> AgentScope {
-        let path_str = path.to_string_lossy();
         let grok = xai_grok_config::user_grok_home();
         let home = xai_dirs::home_dir();
         for (dir, scope) in crate::discovery::user_agent_dirs(home.as_deref(), grok.as_deref()) {
@@ -1302,13 +1301,18 @@ impl AgentDefinition {
                 return scope;
             }
         }
-        if path_str.contains(".grok/agents/") || path_str.contains(".grok\\agents\\") {
-            return AgentScope::Project;
-        }
-        if path_str.contains(".grok/bundled/agents/")
-            || path_str.contains(".grok\\bundled\\agents\\")
+        let names: Vec<&std::ffi::OsStr> = path
+            .components()
+            .filter_map(|component| match component {
+                std::path::Component::Normal(name) => Some(name),
+                _ => None,
+            })
+            .collect();
+        if names
+            .windows(2)
+            .any(|pair| matches!(pair, [dir, agents] if xai_dirs::is_agent_dir_name(dir) && *agents == "agents"))
         {
-            return AgentScope::Bundled;
+            return AgentScope::Project;
         }
         AgentScope::BuiltIn
     }
@@ -2301,23 +2305,26 @@ description: Test default tool config
         assert_eq!(def.source_path, Some(file_path));
     }
     #[test]
-    fn test_scope_from_path_detects_bundled_agents() {
+    fn test_scope_from_path_reads_only_the_agent_folder() {
         let tmp = tempfile::tempdir().unwrap();
-        let bundled = tmp
-            .path()
-            .join("nested")
-            .join(".grok")
-            .join("bundled")
-            .join("agents")
-            .join("bundled-agent.md");
-        std::fs::create_dir_all(bundled.parent().unwrap()).unwrap();
-        std::fs::write(
-            &bundled,
-            "---\nname: bundled-agent\ndescription: Bundled agent\n---\n",
-        )
-        .unwrap();
-        let def = AgentDefinition::from_file(&bundled).unwrap();
-        assert_eq!(def.scope, AgentScope::Bundled);
+        let write = |rel: &[&str]| {
+            let mut path = tmp.path().join("nested");
+            for part in rel {
+                path.push(part);
+            }
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "---\nname: scoped\ndescription: Scoped agent\n---\n").unwrap();
+            AgentDefinition::from_file(&path).unwrap().scope
+        };
+        assert_eq!(
+            write(&[".mlx-agent", "agents", "a.md"]),
+            AgentScope::Project
+        );
+        assert_eq!(write(&[".grok", "agents", "b.md"]), AgentScope::BuiltIn);
+        assert_eq!(
+            write(&[".grok", "bundled", "agents", "c.md"]),
+            AgentScope::BuiltIn
+        );
         assert_eq!(AgentScope::Bundled.label(), "bundled");
         assert_eq!(AgentScope::BuiltIn.label(), "built-in");
     }

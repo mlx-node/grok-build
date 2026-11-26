@@ -21,7 +21,7 @@ pub const MAX_BODY_PEEK_BYTES: usize = 2048;
 pub const MAX_SKILL_WALK_DEPTH: usize = 5;
 
 /// Subdirectory names that contain skill definitions. `skills` is the standard layout
-/// (`.grok/skills/`, `.claude/skills/`, `.cursor/skills/`). The product-specific `skills-cursor/`
+/// (`.mlx-agent/skills/`, `.claude/skills/`, `.cursor/skills/`). The product-specific `skills-cursor/`
 /// layout is no longer scanned — it pulled vendor default skills into Grok Build sessions.
 pub const SKILL_SUBDIRS: &[&str] = &["skills"];
 pub const COMMAND_SUBDIR: &str = "commands";
@@ -823,7 +823,7 @@ pub fn parse_skill_files(skill_files: Vec<(PathBuf, SkillScope)>) -> Vec<SkillIn
 }
 
 /// Walk upward from accessed file paths toward cwd, discovering skill directories not found at startup. Discovery only visits known config
-/// roots (`.grok`, `.agents`, `.claude`, …); those are local harness config (often intentionally gitignored), not tree content. `.cursor/` is
+/// roots (the `.mlx-agent` agent folder, `.agents`, `.claude`); those are local harness config (often intentionally gitignored), not tree content. `.cursor/` is
 /// intentionally NOT scanned in this dynamic path — it never was historically, and preserving that keeps default behavior byte-for-byte.
 pub fn discover_skills_for_paths(
     file_paths: &[&Path],
@@ -832,9 +832,9 @@ pub fn discover_skills_for_paths(
     already_checked: &mut HashSet<PathBuf>,
     compat: CompatConfig,
 ) -> Vec<SkillInfo> {
-    // `.grok` and `.agents` are always scanned; `.claude` is gated on the
+    // The agent folder and `.agents` are always scanned; `.claude` is gated on the
     // claude-vendor skills cell. (`.cursor` is excluded here by design — see fn docs.)
-    let mut config_dir_names: Vec<&str> = vec![".grok", ".agents"];
+    let mut config_dir_names: Vec<&str> = vec![".agents"];
     if compat.claude.skills {
         config_dir_names.push(".claude");
     }
@@ -875,8 +875,10 @@ pub fn discover_skills_for_paths(
                 continue;
             }
 
-            for config_dir_name in &config_dir_names {
-                let config_dir = dir.join(config_dir_name);
+            let config_dirs = xai_dirs::project_agent_dir(&dir)
+                .into_iter()
+                .chain(config_dir_names.iter().map(|name| dir.join(name)));
+            for config_dir in config_dirs {
                 // Skills before commands: skills win name collisions.
                 for path in find_skill_paths(&config_dir)
                     .into_iter()
@@ -1481,7 +1483,7 @@ model: test-model
             "---\nname: shell\ndescription: cursor builtin\n---\n",
         )
         .unwrap();
-        // Same name under /.grok/ → kept (user content).
+        // Same name under /.mlx-agent/ → kept (user content).
         let grok_shell = tmp.path().join(".grok").join("skills").join("shell");
         std::fs::create_dir_all(&grok_shell).unwrap();
         std::fs::write(
@@ -1530,7 +1532,7 @@ model: test-model
         let sub = repo.join("sub");
         std::fs::create_dir_all(&sub).unwrap();
 
-        // A .claude skill and a .grok skill in an intermediate dir.
+        // A .claude skill, an agent-folder skill and a grok-build .grok skill in an intermediate dir.
         let claude_skill = sub.join(".claude").join("skills").join("claude-dyn");
         std::fs::create_dir_all(&claude_skill).unwrap();
         std::fs::write(
@@ -1538,6 +1540,9 @@ model: test-model
             "---\nname: claude-dyn\n---\n",
         )
         .unwrap();
+        let mlx_skill = sub.join(".mlx-agent").join("skills").join("mlx-dyn");
+        std::fs::create_dir_all(&mlx_skill).unwrap();
+        std::fs::write(mlx_skill.join("SKILL.md"), "---\nname: mlx-dyn\n---\n").unwrap();
         let grok_skill = sub.join(".grok").join("skills").join("grok-dyn");
         std::fs::create_dir_all(&grok_skill).unwrap();
         std::fs::write(grok_skill.join("SKILL.md"), "---\nname: grok-dyn\n---\n").unwrap();
@@ -1556,15 +1561,19 @@ model: test-model
         );
         let names_on: Vec<&str> = on.iter().map(|s| s.name.as_str()).collect();
         assert!(
-            names_on.contains(&"grok-dyn"),
-            "grok-dyn missing: {names_on:?}"
+            names_on.contains(&"mlx-dyn"),
+            "mlx-dyn missing: {names_on:?}"
+        );
+        assert!(
+            !names_on.contains(&"grok-dyn"),
+            "a .grok skill is never read: {names_on:?}"
         );
         assert!(
             names_on.contains(&"claude-dyn"),
             "claude-dyn should be found when claude.skills on: {names_on:?}"
         );
 
-        // claude.skills OFF → only grok-dyn discovered.
+        // claude.skills OFF → only mlx-dyn discovered.
         let mut compat_off = CompatConfig::default();
         compat_off.claude.skills = false;
         let mut checked2 = HashSet::new();
@@ -1577,8 +1586,8 @@ model: test-model
         );
         let names_off: Vec<&str> = off.iter().map(|s| s.name.as_str()).collect();
         assert!(
-            names_off.contains(&"grok-dyn"),
-            "grok-dyn missing: {names_off:?}"
+            names_off.contains(&"mlx-dyn"),
+            "mlx-dyn missing: {names_off:?}"
         );
         assert!(
             !names_off.contains(&"claude-dyn"),

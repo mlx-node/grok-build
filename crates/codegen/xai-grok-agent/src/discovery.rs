@@ -1,4 +1,4 @@
-//! Searches `.grok/agents/` and `.claude/agents/` from cwd to repo root,
+//! Searches `.mlx-agent/agents/` and `.claude/agents/` from cwd to repo root,
 //! then the agent home's `agents/`, then `~/.claude/agents/`. Name-based dedup keeps
 //! highest priority. grok-build's `~/.grok` is never read.
 
@@ -12,10 +12,11 @@ use crate::config::{AgentDefinition, AgentScope, BuiltinAgentName};
 use crate::error::AgentBuildError;
 use crate::prompt::context::TemplateOverride;
 
-/// Project-level agent directories to scan (`.grok/agents/` plus `.claude/agents/` for compat).
-const PROJECT_AGENT_SUBDIRS: &[&str] = &[".grok/agents", ".claude/agents"];
+/// Project-level agent directories to scan: `.mlx-agent/agents/` plus `.claude/agents/` for compat.
+const PROJECT_AGENT_SUBDIR: &str = "agents";
+const PROJECT_VENDOR_AGENT_DIRS: &[&str] = &[".claude/agents"];
 
-/// Existing project-level agent dirs (`.grok/agents` / `.claude/agents`), walked from `cwd` up to the git worktree root (inclusive).
+/// Existing project-level agent dirs (`.mlx-agent/agents` / `.claude/agents`), walked from `cwd` up to the git worktree root (inclusive).
 /// Returns `(existing dirs, git_root)`.
 /// Mirrors [`crate::plugins::project_plugin_dirs`].
 pub fn project_agent_dirs(cwd: Option<&Path>) -> (Vec<PathBuf>, Option<PathBuf>) {
@@ -27,9 +28,9 @@ pub fn project_agent_dirs(cwd: Option<&Path>) -> (Vec<PathBuf>, Option<PathBuf>)
 }
 
 /// Existing project agent dirs under each dir of a cwd-to-git-root chain.
-/// The only place that walks `PROJECT_AGENT_SUBDIRS`. The folder-trust detector reuses it so detection cannot drift from discovery.
+/// The only place that walks the project agent dirs. The folder-trust detector reuses it so detection cannot drift from discovery.
 pub fn project_agent_dirs_in(chain_dirs: &[PathBuf]) -> Vec<PathBuf> {
-    crate::repo::existing_subdirs_along(chain_dirs, PROJECT_AGENT_SUBDIRS)
+    crate::repo::existing_subdirs_along(chain_dirs, PROJECT_AGENT_SUBDIR, PROJECT_VENDOR_AGENT_DIRS)
 }
 
 /// Whether an agent dir loads: `.claude/agents`, in the project or home, only while `claude` is on.
@@ -173,7 +174,7 @@ fn merge_subagents(
 }
 
 /// Discover agent definitions from the filesystem. Deduplicates by name; higher priority wins.
-/// Order: project `.grok/agents/` (cwd up to repo root), the agent home (`grok_home`), compat `~/.claude`, then bundled.
+/// Order: project `.mlx-agent/agents/` (cwd up to repo root), the agent home (`grok_home`), compat `~/.claude`, then bundled.
 pub(crate) fn user_agent_dirs(
     home: Option<&Path>,
     grok_home: Option<&Path>,
@@ -261,7 +262,7 @@ fn by_name_with_home(
     None
 }
 
-/// Project-level `.grok/agents/` has highest priority, then falls back to built-ins, user-level, and finally bundled definitions.
+/// Project-level `.mlx-agent/agents/` has highest priority, then falls back to built-ins, user-level, and finally bundled definitions.
 pub fn by_name_in_cwd(name: &str, cwd: &Path) -> Option<AgentDefinition> {
     let grok = xai_grok_config::user_grok_home();
     by_name_in_cwd_with_home(
@@ -564,7 +565,7 @@ fn substitute_plugin_vars(def: &mut AgentDefinition, plugin: &crate::plugins::Lo
     }
 }
 
-/// Load project agent definitions from every `.grok/agents` / `.claude/agents` dir that [`project_agent_dirs`] finds along the cwd-to-git-root walk.
+/// Load project agent definitions from every `.mlx-agent/agents` / `.claude/agents` dir that [`project_agent_dirs`] finds along the cwd-to-git-root walk.
 fn load_project_definitions(
     cwd: &Path,
     claude: bool,
@@ -823,6 +824,34 @@ mod tests {
     }
 
     #[test]
+    fn project_agents_and_plugins_load_only_from_the_agent_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let home = tmp.path().join("home");
+        for (dir, name) in [(".grok", "grokmark"), (".mlx-agent", "mlxmark")] {
+            let agents = repo.join(dir).join("agents");
+            fs::create_dir_all(&agents).unwrap();
+            write_agent_file(&agents, &format!("{name}.md"), name, name);
+            fs::create_dir_all(repo.join(dir).join("plugins").join(name)).unwrap();
+        }
+        git2::Repository::init(&repo).unwrap();
+        let names: Vec<String> =
+            discover_with_home(&repo, Some(&home), Some(&home.join(".mlx-agent")), true)
+                .into_iter()
+                .map(|def| def.name)
+                .collect();
+        assert_eq!(names, vec!["mlxmark".to_string()]);
+        assert_eq!(
+            project_agent_dirs(Some(&repo)).0,
+            vec![repo.join(".mlx-agent").join("agents")]
+        );
+        assert_eq!(
+            crate::plugins::project_plugin_dirs(Some(&repo)).0,
+            vec![repo.join(".mlx-agent").join("plugins")]
+        );
+    }
+
+    #[test]
     fn test_by_name_unknown_agent_is_not_builtin() {
         // Not a built-in, so this returns None unless a project or user-level agent file exists with that name
         let def = by_name("not-a-builtin-agent");
@@ -859,7 +888,7 @@ mod tests {
     #[test]
     fn test_discover_finds_md_files() {
         let tmp = tempfile::tempdir().unwrap();
-        let agents_dir = tmp.path().join(".grok").join("agents");
+        let agents_dir = tmp.path().join(".mlx-agent").join("agents");
         fs::create_dir_all(&agents_dir).unwrap();
 
         write_agent_file(&agents_dir, "test-agent.md", "test-agent", "A test");
@@ -875,7 +904,7 @@ mod tests {
     #[test]
     fn test_discover_ignores_non_md_files() {
         let tmp = tempfile::tempdir().unwrap();
-        let agents_dir = tmp.path().join(".grok").join("agents");
+        let agents_dir = tmp.path().join(".mlx-agent").join("agents");
         fs::create_dir_all(&agents_dir).unwrap();
 
         write_agent_file(&agents_dir, "valid.md", "valid", "Valid agent");
@@ -890,7 +919,7 @@ mod tests {
     #[test]
     fn test_discover_invalid_md_logged_not_error() {
         let tmp = tempfile::tempdir().unwrap();
-        let agents_dir = tmp.path().join(".grok").join("agents");
+        let agents_dir = tmp.path().join(".mlx-agent").join("agents");
         fs::create_dir_all(&agents_dir).unwrap();
 
         write_agent_file(&agents_dir, "good.md", "good", "Good agent");
@@ -909,8 +938,8 @@ mod tests {
         let inner_dir = tmp.path().join("subdir");
         fs::create_dir_all(&inner_dir).unwrap();
 
-        let agents_dir_1 = tmp.path().join(".grok").join("agents");
-        let agents_dir_2 = inner_dir.join(".grok").join("agents");
+        let agents_dir_1 = tmp.path().join(".mlx-agent").join("agents");
+        let agents_dir_2 = inner_dir.join(".mlx-agent").join("agents");
         fs::create_dir_all(&agents_dir_1).unwrap();
         fs::create_dir_all(&agents_dir_2).unwrap();
 
@@ -1030,8 +1059,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path().join("workspace");
         let home = tmp.path().join("home");
-        let project_dir = cwd.join(".grok").join("agents");
-        let bundled_dir = home.join(".grok").join("bundled").join("agents");
+        let project_dir = cwd.join(".mlx-agent").join("agents");
+        let bundled_dir = home.join(".mlx-agent").join("bundled").join("agents");
         fs::create_dir_all(&project_dir).unwrap();
         fs::create_dir_all(&bundled_dir).unwrap();
 
@@ -1042,7 +1071,7 @@ mod tests {
             "reviewer",
             &cwd,
             Some(&home),
-            Some(&home.join(".grok")),
+            Some(&home.join(".mlx-agent")),
             true,
         )
         .unwrap();
@@ -1055,9 +1084,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path().join("workspace");
         let home = tmp.path().join("home");
-        let grok_home = home.join(".grok");
+        let grok_home = home.join(".mlx-agent");
         let project_claude = cwd.join(".claude").join("agents");
-        let project_grok = cwd.join(".grok").join("agents");
+        let project_grok = cwd.join(".mlx-agent").join("agents");
         let user_claude = home.join(".claude").join("agents");
         let user_grok = grok_home.join("agents");
         for dir in [&project_claude, &project_grok, &user_claude, &user_grok] {
@@ -1110,8 +1139,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path().join("workspace");
         let home = tmp.path().join("home");
-        let grok_home = home.join(".grok");
-        let project_grok = cwd.join(".grok").join("agents");
+        let grok_home = home.join(".mlx-agent");
+        let project_grok = cwd.join(".mlx-agent").join("agents");
         let project_claude = cwd.join(".claude").join("agents");
         let user_grok = grok_home.join("agents");
         let user_claude = home.join(".claude").join("agents");
@@ -1158,7 +1187,7 @@ mod tests {
     #[test]
     fn test_by_name_in_cwd_project_shadows_builtin() {
         let tmp = tempfile::tempdir().unwrap();
-        let agents_dir = tmp.path().join(".grok").join("agents");
+        let agents_dir = tmp.path().join(".mlx-agent").join("agents");
         fs::create_dir_all(&agents_dir).unwrap();
 
         // Create a project-level "grok-build" that shadows the built-in
@@ -1179,7 +1208,7 @@ mod tests {
     #[test]
     fn test_by_name_in_cwd_falls_back_to_builtin() {
         let tmp = tempfile::tempdir().unwrap();
-        // No .grok/agents/ directory, so lookup falls back to the built-in
+        // No .mlx-agent/agents/ directory, so lookup falls back to the built-in
 
         let def = by_name_in_cwd("grok-build", tmp.path());
         assert!(def.is_some());
@@ -1463,7 +1492,7 @@ mod tests {
     #[test]
     fn test_all_subagents_with_project_agent_file() {
         let tmp = tempfile::tempdir().unwrap();
-        let agents_dir = tmp.path().join(".grok").join("agents");
+        let agents_dir = tmp.path().join(".mlx-agent").join("agents");
         fs::create_dir_all(&agents_dir).unwrap();
 
         write_agent_file(

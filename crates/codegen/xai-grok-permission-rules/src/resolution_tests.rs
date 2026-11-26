@@ -1216,16 +1216,16 @@ fn untrusted_project_claude_permissions_are_not_honored() {
     );
 }
 
-/// Untrusted clone must not contribute project `.grok/config.toml` `[permission]`.
+/// Untrusted clone must not contribute project `.mlx-agent/config.toml` `[permission]`.
 /// Sync `block_on` so `ENV_LOCK` is not held across `.await`. Global counts are not exact: `grok_home()` is a process-wide `OnceLock`.
 #[test]
 fn untrusted_project_config_toml_permissions_are_not_honored() {
     let home = isolated_home();
 
     // Global allow (survives untrusted project when GROK_HOME resolves here).
-    std::fs::create_dir_all(home.path().join(".grok")).unwrap();
+    std::fs::create_dir_all(home.path().join(".mlx-agent")).unwrap();
     std::fs::write(
-        home.path().join(".grok/config.toml"),
+        home.path().join(".mlx-agent/config.toml"),
         r#"[permission]
 allow = ["Bash(git status)"]
 "#,
@@ -1235,7 +1235,7 @@ allow = ["Bash(git status)"]
     let tmp = tempfile::tempdir().unwrap();
     // Bound project discovery to this temp dir (canonical walker uses git root).
     git2::Repository::init(tmp.path()).expect("git init");
-    let grok = tmp.path().join(".grok");
+    let grok = tmp.path().join(".mlx-agent");
     std::fs::create_dir_all(&grok).unwrap();
     std::fs::write(
         grok.join("config.toml"),

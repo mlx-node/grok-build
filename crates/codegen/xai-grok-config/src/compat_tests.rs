@@ -493,7 +493,7 @@ fn registry_and_defaults_cover_every_cell() {
 #[test]
 fn skill_config_dirs_all_on_lists_every_vendor() {
     assert_eq!(
-        vec![".grok", ".agents", ".claude", ".cursor"],
+        vec![".agents", ".claude", ".cursor"],
         CompatConfig::default().skill_config_dirs()
     );
 }
@@ -502,20 +502,20 @@ fn skill_config_dirs_all_on_lists_every_vendor() {
 fn skill_config_dirs_gates_each_vendor() {
     let mut c = CompatConfig::default();
     c.cursor.skills = false;
-    assert_eq!(vec![".grok", ".agents", ".claude"], c.skill_config_dirs());
+    assert_eq!(vec![".agents", ".claude"], c.skill_config_dirs());
 
     c.claude.skills = false;
-    assert_eq!(vec![".grok", ".agents"], c.skill_config_dirs());
+    assert_eq!(vec![".agents"], c.skill_config_dirs());
 
     let mut c2 = CompatConfig::default();
     c2.claude.skills = false;
-    assert_eq!(vec![".grok", ".agents", ".cursor"], c2.skill_config_dirs());
+    assert_eq!(vec![".agents", ".cursor"], c2.skill_config_dirs());
 }
 
 #[test]
 fn rules_dirs_all_on_lists_every_vendor() {
     assert_eq!(
-        vec![".grok/rules", ".claude/rules", ".cursor/rules"],
+        vec![".claude/rules", ".cursor/rules"],
         CompatConfig::default().rules_dirs()
     );
 }
@@ -524,9 +524,9 @@ fn rules_dirs_all_on_lists_every_vendor() {
 fn rules_dirs_gates_each_vendor() {
     let mut c = CompatConfig::default();
     c.cursor.rules = false;
-    assert_eq!(vec![".grok/rules", ".claude/rules"], c.rules_dirs());
+    assert_eq!(vec![".claude/rules"], c.rules_dirs());
     c.claude.rules = false;
-    assert_eq!(vec![".grok/rules"], c.rules_dirs());
+    assert!(c.rules_dirs().is_empty());
 }
 
 #[test]

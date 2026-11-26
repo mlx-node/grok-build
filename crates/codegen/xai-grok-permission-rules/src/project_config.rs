@@ -1,4 +1,4 @@
-//! Project config-file discovery: locating repo-local `.mcp.json` and `.grok/config.toml` files by walking from `cwd` up to the git root.
+//! Project config-file discovery: locating repo-local `.mcp.json` and `.mlx-agent/config.toml` files by walking from `cwd` up to the git root.
 //!
 //! These pure `git2` and filesystem walks are shared by the shell's config loaders and the folder-trust gate's `repo_configs_present`.
 
@@ -38,29 +38,14 @@ pub fn find_mcp_json_files_in(chain_dirs: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
-/// True when `config_path` is `<grok_home>/config.toml` (user tier, not project).
-fn is_user_grok_config_file(config_path: &Path, grok_home: Option<&Path>) -> bool {
-    let Some(grok_home) = grok_home else {
-        return false;
-    };
-    let user_config = grok_home.join("config.toml");
-    if config_path == user_config.as_path() {
-        return true;
-    }
-    let Ok(canonical_config) = dunce::canonicalize(config_path) else {
-        return false;
-    };
-    let canonical_user = dunce::canonicalize(&user_config).unwrap_or(user_config);
-    canonical_config == canonical_user
-}
-
-/// Find `.grok/config.toml` from `cwd` up to the git repo root, repo-root (lowest) to cwd (highest), matching skills and AGENTS.md discovery.
-/// No repo: only `cwd/.grok/config.toml`. Excludes user-global config so `cwd == $HOME` is not a project overlay.
+/// Find `.mlx-agent/config.toml` from `cwd` up to the git repo root, repo-root (lowest) to cwd (highest), matching skills and AGENTS.md discovery.
+/// No repo: only `cwd/.mlx-agent/config.toml`. The home folder and a folder whose `.mlx-agent` is the agent home have none,
+/// so the user config is never a project overlay.
 pub fn find_project_configs(cwd: &Path) -> Vec<PathBuf> {
     find_project_configs_under(
         cwd,
         xai_dirs::home_dir().as_deref(),
-        xai_grok_config::user_grok_home().as_deref(),
+        xai_dirs::resolve_grok_home().as_deref(),
     )
 }
 
@@ -69,20 +54,26 @@ pub fn find_project_configs_under(
     home: Option<&Path>,
     grok_home: Option<&Path>,
 ) -> Vec<PathBuf> {
-    find_project_configs_in(&RepoDirChain::resolve_under_home(cwd, home).dirs, grok_home)
+    find_project_configs_in(
+        &RepoDirChain::resolve_under_home(cwd, home).dirs,
+        home,
+        grok_home,
+    )
 }
 
-/// [`find_project_configs`] over a precomputed [`RepoDirChain`], repo-root-first.
-/// Excludes user-global config so `cwd == $HOME` is not a project overlay. `pub` for the folder-trust gate.
-pub fn find_project_configs_in(chain_dirs: &[PathBuf], grok_home: Option<&Path>) -> Vec<PathBuf> {
+/// [`find_project_configs`] over a precomputed [`RepoDirChain`], repo-root-first. `pub` for the folder-trust gate.
+pub fn find_project_configs_in(
+    chain_dirs: &[PathBuf],
+    home: Option<&Path>,
+    grok_home: Option<&Path>,
+) -> Vec<PathBuf> {
     // `dirs` is cwd-first; reverse so repo root comes first (lowest priority) and cwd last (highest)
     chain_dirs
         .iter()
         .rev()
-        .map(|dir| dir.join(".grok").join("config.toml"))
-        .filter(|config_path| {
-            config_path.is_file() && !is_user_grok_config_file(config_path, grok_home)
-        })
+        .filter_map(|dir| xai_dirs::project_agent_dir_in(dir, home, grok_home))
+        .map(|folder| folder.join("config.toml"))
+        .filter(|config_path| config_path.is_file())
         .collect()
 }
 
@@ -91,28 +82,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn find_project_configs_excludes_user_grok_config_file() {
-        let home = tempfile::tempdir().unwrap();
-        let user_home = home.path().join(".grok");
-        std::fs::create_dir_all(&user_home).unwrap();
-        let user_config = user_home.join("config.toml");
-        std::fs::write(&user_config, "# user\n").unwrap();
-        let from_home =
-            find_project_configs_under(home.path(), Some(home.path()), Some(&user_home));
+    fn find_project_configs_reads_only_the_agent_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(tmp.path()).unwrap();
+        let home = root.join("home");
+        let agent_home = home.join(".mlx-agent");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        std::fs::write(agent_home.join("config.toml"), "# user\n").unwrap();
+        std::fs::create_dir_all(home.join(".grok")).unwrap();
+        std::fs::write(home.join(".grok/config.toml"), "# GROKMARK\n").unwrap();
         assert!(
-            from_home.is_empty(),
-            "user config leaked into project configs: {from_home:?}"
+            find_project_configs_under(&home, Some(&home), Some(&agent_home)).is_empty(),
+            "the home folder has no project config"
         );
-        assert!(is_user_grok_config_file(&user_config, Some(&user_home)));
+        assert!(
+            find_project_configs_under(&home, Some(&home), Some(&root.join("agent-home")))
+                .is_empty(),
+            "the home folder has no project config, whatever the agent home is"
+        );
 
-        let project = home.path().join("repo");
+        let project = home.join("repo");
         std::fs::create_dir_all(project.join(".grok")).unwrap();
-        std::fs::write(project.join(".grok/config.toml"), "# project\n").unwrap();
-        let found = find_project_configs_under(&project, Some(home.path()), Some(&user_home));
-        assert_eq!(found.len(), 1);
-        let Some(first) = found.first() else {
-            panic!("expected one project config: {found:?}");
-        };
-        assert!(!is_user_grok_config_file(first, Some(&user_home)));
+        std::fs::write(project.join(".grok/config.toml"), "# GROKMARK\n").unwrap();
+        std::fs::create_dir_all(project.join(".mlx-agent")).unwrap();
+        std::fs::write(project.join(".mlx-agent/config.toml"), "# MLXMARK\n").unwrap();
+        let found = find_project_configs_under(&project, Some(&home), Some(&agent_home));
+        assert_eq!(found, vec![project.join(".mlx-agent").join("config.toml")]);
+
+        let custom_home = home.join("work").join(".mlx-agent");
+        std::fs::create_dir_all(&custom_home).unwrap();
+        std::fs::write(custom_home.join("config.toml"), "# user\n").unwrap();
+        assert!(
+            find_project_configs_under(&home.join("work"), Some(&home), Some(&custom_home))
+                .is_empty(),
+            "a custom agent home's config is the user tier, not a project overlay"
+        );
     }
 }

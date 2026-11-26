@@ -1,5 +1,5 @@
 //! Sandbox profiles. Built-in: `workspace`, `devbox`, `read-only`, `strict`,
-//! `off`. Custom profiles via `~/.grok/sandbox.toml` or `.grok/sandbox.toml`.
+//! `off`. Custom profiles via `~/.grok/sandbox.toml` or `.mlx-agent/sandbox.toml`.
 //! A custom profile's `deny` list is kernel-enforced (read and write/rename) on both platforms.
 
 #[cfg(all(feature = "enforce", unix))]
@@ -111,7 +111,7 @@ impl std::str::FromStr for ProfileName {
     }
 }
 
-/// Load sandbox config from `~/.grok/sandbox.toml` and `.grok/sandbox.toml`. Project config may add new profile names
+/// Load sandbox config from the agent home's `sandbox.toml` and `.mlx-agent/sandbox.toml`. Project config may add new profile names
 /// only. It cannot redefine a name already present in the global config. Last-write-wins would let a malicious workspace
 /// hollow out a user/enterprise custom profile while keeping the trusted name.
 pub fn load_sandbox_config(workspace: &Path) -> SandboxConfig {
@@ -123,19 +123,22 @@ pub fn load_sandbox_config(workspace: &Path) -> SandboxConfig {
         config = global;
     }
 
-    // Project config: <workspace>/.grok/sandbox.toml (additive only)
-    let project_path = workspace.join(".grok").join(SANDBOX_CONFIG_FILENAME);
-    if let Some(project) = load_config_file(&project_path) {
+    // Project config: <workspace>/.mlx-agent/sandbox.toml (additive only)
+    if let Some(project) = load_project_config_file(workspace) {
         merge_project_profiles(&mut config, project);
     }
 
     config
 }
 
+fn load_project_config_file(workspace: &Path) -> Option<SandboxConfig> {
+    let folder = xai_dirs::project_agent_dir(workspace)?;
+    load_config_file(&folder.join(SANDBOX_CONFIG_FILENAME))
+}
+
 pub fn sandbox_profile_conflicts(workspace: &Path) -> Vec<String> {
     let global = load_config_file(&grok_home().join(SANDBOX_CONFIG_FILENAME)).unwrap_or_default();
-    let project = load_config_file(&workspace.join(".grok").join(SANDBOX_CONFIG_FILENAME))
-        .unwrap_or_default();
+    let project = load_project_config_file(workspace).unwrap_or_default();
     mismatched_profile_names(&global, &project)
 }
 
@@ -569,6 +572,30 @@ impl ProfileName {
 mod tests {
     use super::*;
     use crate::test_util::{network_inheritance_config, skip_if_host_hook_write_deny_unresolvable};
+
+    #[test]
+    fn project_sandbox_toml_is_read_only_from_the_agent_folder() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let ws = std::env::temp_dir().join(format!(
+            "grok-project-sandbox-{}-{nanos}",
+            std::process::id()
+        ));
+        for (dir, name) in [(".grok", "grokmark"), (".mlx-agent", "mlxmark")] {
+            std::fs::create_dir_all(ws.join(dir)).unwrap();
+            std::fs::write(
+                ws.join(dir).join(SANDBOX_CONFIG_FILENAME),
+                format!("[profiles.{name}]\nextends = \"workspace\"\n"),
+            )
+            .unwrap();
+        }
+        let config = load_sandbox_config(&ws);
+        let _ = std::fs::remove_dir_all(&ws);
+        assert!(config.profiles.contains_key("mlxmark"));
+        assert!(!config.profiles.contains_key("grokmark"));
+    }
 
     #[test]
     fn parse_profile_names() {

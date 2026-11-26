@@ -117,13 +117,13 @@ fn a_malformed_plugins_list_keeps_the_disabled_list() {
 #[test]
 fn project_disabled_merges_untrusted_and_project_paths_only_when_trusted() {
     let cwd = tempfile::tempdir().expect("create temp cwd");
-    let grok = cwd.path().join(".grok");
+    let grok = cwd.path().join(".mlx-agent");
     std::fs::create_dir_all(&grok).expect("create .grok");
     std::fs::write(
         grok.join("config.toml"),
         "[plugins]\npaths = [\"./project-plugin\"]\ndisabled = [\"project-off\"]\n",
     )
-    .expect("write .grok/config.toml");
+    .expect("write .mlx-agent/config.toml");
 
     for (trust, expected_paths) in [
         (Trust::Untrusted, Vec::new()),

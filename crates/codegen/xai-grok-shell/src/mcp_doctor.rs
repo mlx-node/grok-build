@@ -627,7 +627,7 @@ pub fn policy_enable_refusal(cwd: &Path, name: &str) -> Option<String> {
 pub enum McpWriteScope {
     /// `~/.grok/config.toml`.
     User,
-    /// `./.grok/config.toml`.
+    /// `./.mlx-agent/config.toml`.
     Project,
 }
 
@@ -971,9 +971,9 @@ mod tests {
         crate::claude_import::refresh_marker_cache(false);
         let repo = tempfile::tempdir().unwrap();
         git2::Repository::init(repo.path()).unwrap();
-        std::fs::create_dir_all(repo.path().join(".grok")).unwrap();
+        std::fs::create_dir_all(repo.path().join(".mlx-agent")).unwrap();
         std::fs::write(
-            repo.path().join(".grok/config.toml"),
+            repo.path().join(".mlx-agent/config.toml"),
             "[mcp_servers.corp]\nurl = \"https://corp.example/mcp\"\n",
         )
         .unwrap();
