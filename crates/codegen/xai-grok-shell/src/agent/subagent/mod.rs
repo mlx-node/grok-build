@@ -2019,6 +2019,7 @@ fn goal_tick_cmd_tx(
 /// Spawn a background task that periodically emits `SubagentProgress` notifications on the parent session's notification channel. The publisher samples the child's `SessionSignalsHandle` every [`PROGRESS_PUBLISH_INTERVAL`].
 /// It stops automatically when `cancel_token` is cancelled (subagent completion/cancellation).
 /// When `parent_cmd_tx` is `Some`, each tick also goes to the parent `SessionActor` so goal mode can advance its live subagent token accounting. The actor's `SubagentProgress` arm never persists these ticks. Notifications are **not** persisted to JSONL; they are transient UI hints, not authoritative lifecycle events.
+/// Ticks count turns and tool calls from `counts_at_start`, the child's `(tool calls, turns)` when this attempt started.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_progress_publisher(
     signals_handle: crate::session::signals::SessionSignalsHandle,
@@ -2030,6 +2031,7 @@ pub(crate) fn spawn_progress_publisher(
     started_at: std::time::Instant,
     cancel_token: tokio_util::sync::CancellationToken,
     parent_cmd_tx: Option<mpsc::UnboundedSender<SessionCommand>>,
+    counts_at_start: (u32, u32),
 ) -> tokio_util::task::AbortOnDropHandle<()> {
     tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
         let mut interval = tokio::time::interval(PROGRESS_PUBLISH_INTERVAL);
@@ -2066,8 +2068,8 @@ pub(crate) fn spawn_progress_publisher(
                 parent_session_id: parent_session_id.clone(),
                 child_session_id: child_session_id.clone(),
                 duration_ms,
-                turn_count: signals.turn_count,
-                tool_call_count: signals.tool_call_count,
+                turn_count: signals.turn_count.saturating_sub(counts_at_start.1),
+                tool_call_count: signals.tool_call_count.saturating_sub(counts_at_start.0),
                 tokens_used: signals.context_tokens_used,
                 context_window_tokens: signals.context_window_tokens,
                 context_usage_pct: signals.context_window_usage,

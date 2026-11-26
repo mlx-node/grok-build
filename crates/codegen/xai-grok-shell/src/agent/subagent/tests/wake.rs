@@ -1268,3 +1268,172 @@ async fn child_title_is_its_description_with_no_title_call() {
         })
         .await;
 }
+
+/// A reads a file; B resumes A and reads it again; C resumes A and its first model call is refused.
+/// Mutations that turn it red: report the lifetime counts (B: 2 tool calls, 2 turns), snapshot after the first prompt
+/// (B: 0 turns), snapshot at the end (B: 0 and 0), and gate the token report on the attempt's own tool calls (C: 0 tokens).
+#[tokio::test(flavor = "current_thread")]
+async fn resumed_child_reports_only_its_own_counts() {
+    use crate::session::storage::StorageAdapter;
+    use xai_grok_test_support::{Conversation, MockToolCall, StatusFailure, Tool};
+    use xai_grok_tools::implementations::grok_build::task::backend::{
+        ChannelBackend, SubagentBackend,
+    };
+    use xai_grok_tools::implementations::grok_build::task::coordinator::{
+        CoordinatorConfig, SubagentCoordinator,
+    };
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let workdir = tempfile::TempDir::new().expect("workdir");
+            std::fs::write(workdir.path().join("AGENTS.md"), "Keep answers short.\n")
+                .expect("project instructions");
+            let notes = workdir.path().join("notes.txt");
+            std::fs::write(&notes, "probe notes\n").expect("notes");
+            let read_notes = || {
+                MockToolCall::new(
+                    Tool::Read,
+                    serde_json::json!({ "target_file": notes.to_string_lossy() }),
+                )
+            };
+            let server = xai_grok_test_support::MockInferenceServer::start()
+                .await
+                .expect("mock server");
+            server.set_conversations([
+                Conversation::nth(1).calls([read_notes()]).reply("A done"),
+                Conversation::nth(2).calls([read_notes()]).reply("B done"),
+                Conversation::nth(3)
+                    .refuse(StatusFailure::new(400))
+                    .reply("C never answers"),
+            ]);
+            let (parent_cmd_tx, parent_cmd_rx) = mpsc::unbounded_channel();
+            let usage_ack = tokio::task::spawn_local(acknowledge_parent_usage(parent_cmd_rx));
+            let metas: Vec<tempfile::TempDir> = (0..3)
+                .map(|_| tempfile::TempDir::new().expect("meta dir"))
+                .collect();
+            let contexts: Vec<SubagentSpawnContext> = metas
+                .iter()
+                .map(|meta| {
+                    let mut ctx = ctx_with_toggle(HashMap::new());
+                    configure_completion_harness(
+                        &mut ctx,
+                        &server,
+                        RunShellChildHarnessConfig::new(
+                            meta.path().to_path_buf(),
+                            InitialAttemptBehavior::Normal,
+                        ),
+                    );
+                    ctx.parent_cwd = workdir.path().to_path_buf();
+                    ctx.parent_cmd_tx = Some(parent_cmd_tx.clone());
+                    ctx
+                })
+                .collect();
+            drop(parent_cmd_tx);
+            let (gateway, mut gateway_rx) = test_gateway_with_receiver();
+            let (command_tx, command_rx) =
+                SubagentCoordinator::<RunShellChildTestRunner>::channel();
+            let coordinator = tokio::task::spawn_local(
+                SubagentCoordinator::from_channel(
+                    command_rx,
+                    RunShellChildTestRunner::new(contexts, false, gateway),
+                    CoordinatorConfig::default(),
+                )
+                .run(),
+            );
+            let backend = ChannelBackend::for_coordinator_session(command_tx, "setup-parent");
+            let request = |id: &str, prompt: &str, resume_from: Option<&str>| {
+                let mut request = auto_wake_test_request(id);
+                request.prompt = prompt.to_owned();
+                request.resume_from = resume_from.map(str::to_owned);
+                request.run_in_background = false;
+                request
+            };
+            let [a_id, b_id, c_id] = [(); 3].map(|()| uuid::Uuid::now_v7().to_string());
+
+            let a = backend
+                .spawn(request(&a_id, "Read the notes file, then say done.", None), None)
+                .await
+                .expect("A spawn");
+            assert!(a.success, "A: {:?}", a.error);
+            assert_eq!((a.turns, a.tool_calls), (1, 1));
+            let a_history = crate::session::storage::jsonl::JsonlStorageAdapter::with_root(
+                crate::util::grok_home::grok_home(),
+            )
+            .load_session_without_updates(&SessionInfo {
+                id: acp::SessionId::new(a_id.clone()),
+                cwd: workdir.path().to_string_lossy().into_owned(),
+            })
+            .await
+            .expect("A history")
+            .chat_history;
+            let a_users = a_history
+                .iter()
+                .filter(|item| {
+                    matches!(
+                        item,
+                        xai_grok_sampling_types::conversation::ConversationItem::User(_)
+                    )
+                })
+                .count();
+            assert!(
+                a_users >= 2,
+                "the resume seed counts A's user items minus one, so B must start at turn 1 or later: {a_users}"
+            );
+
+            let b = backend
+                .spawn(
+                    request(&b_id, "Read the notes again, then say done.", Some(&a_id)),
+                    None,
+                )
+                .await
+                .expect("B spawn");
+            assert!(b.success, "B: {:?}", b.error);
+            assert_eq!((b.turns, b.tool_calls), (1, 1));
+
+            let c = backend
+                .spawn(request(&c_id, "Say done.", Some(&a_id)), None)
+                .await
+                .expect("C spawn");
+            assert!(!c.success, "C must fail on the refused call");
+            assert_eq!((c.turns, c.tool_calls), (1, 0));
+            drop(backend);
+            coordinator.await.expect("coordinator");
+            usage_ack.abort();
+            let unserved: Vec<String> = server
+                .finish_scripts()
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+            assert_eq!(unserved, ["conversation 3: 0 of 1 entries served"]);
+
+            let mut finished = HashMap::new();
+            while let Ok(message) = gateway_rx.try_recv() {
+                let xai_acp_lib::AcpClientMessage::ExtNotification(args) = message else {
+                    continue;
+                };
+                let Ok(notification) =
+                    serde_json::from_str::<SessionNotification>(args.request.params.get())
+                else {
+                    continue;
+                };
+                if let SessionUpdate::SubagentFinished {
+                    subagent_id,
+                    turns,
+                    tool_calls,
+                    tokens_used,
+                    ..
+                } = notification.update
+                {
+                    finished.insert(subagent_id, (turns, tool_calls, tokens_used));
+                }
+            }
+            assert_eq!((finished[&a_id].0, finished[&a_id].1), (1, 1));
+            assert_eq!((finished[&b_id].0, finished[&b_id].1), (1, 1));
+            assert_eq!((finished[&c_id].0, finished[&c_id].1), (1, 0));
+            assert!(
+                finished[&c_id].2 > 0,
+                "a failed resume still reports its inherited context: {:?}",
+                finished[&c_id]
+            );
+        })
+        .await;
+}
