@@ -150,6 +150,25 @@ async fn script_that_exits_cleanly_still_loses_what_it_backgrounded() {
 }
 
 #[tokio::test]
+async fn output_written_before_an_exit_the_reactor_has_not_reported_still_paints() {
+    let ctx = ctx();
+    let mut run = std::pin::pin!(run_command("printf row", &ctx, ROW, COMMAND_TIMEOUT));
+    let row = std::future::poll_fn(|cx| {
+        for _ in 0..100 {
+            if let std::task::Poll::Ready(row) = run.as_mut().poll(cx) {
+                return std::task::Poll::Ready(row);
+            }
+            // Blocking here keeps the reactor from running between polls, so a poll sees the exit before any readiness for the output
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("the run never finished");
+    })
+    .await;
+
+    assert_eq!(row.unwrap(), "row");
+}
+
+#[tokio::test]
 async fn background_job_holding_stdout_does_not_hold_the_row() {
     // No redirect, so the grandchild inherits stdout and the pipe stays open for five seconds after the shell exits
     // Reading to EOF would wait for it
