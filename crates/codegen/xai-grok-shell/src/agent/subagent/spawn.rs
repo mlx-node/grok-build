@@ -623,6 +623,7 @@ mod address_tests {
             model: None,
             resumed_from: None,
             workflow_run_id: None,
+            retry_of: None,
             agent_address,
         }
     }

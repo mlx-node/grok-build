@@ -526,43 +526,47 @@ impl HostService {
         };
         let cancel_token = CancellationToken::new();
 
-        let spawn_once =
-            |child_id: String, prompt: String, resume_from: Option<String>, fork_context: bool| {
-                SubagentRequest {
-                    id: child_id,
-                    prompt,
-                    description: description.clone(),
-                    subagent_type: subagent_type.clone(),
-                    parent_session_id: self.params.parent_session_id.clone(),
-                    parent_prompt_id: None,
-                    resume_from,
-                    cwd: None,
-                    runtime_overrides: SubagentRuntimeOverrides {
-                        model: opts.model.clone(),
-                        reasoning_effort: reasoning_effort.map(|effort| effort.to_string()),
-                        output_token_budget: None,
-                        model_override_provenance: ModelOverrideProvenance::Tool {
-                            selection: self.params.task_model_selection.get(),
-                        },
-                        isolation,
-                        output_schema: None,
-                        ..Default::default()
+        let spawn_once = |child_id: String,
+                          prompt: String,
+                          resume_from: Option<String>,
+                          fork_context: bool,
+                          owner: SubagentOwner| {
+            SubagentRequest {
+                id: child_id,
+                prompt,
+                description: description.clone(),
+                subagent_type: subagent_type.clone(),
+                parent_session_id: self.params.parent_session_id.clone(),
+                parent_prompt_id: None,
+                resume_from,
+                cwd: None,
+                runtime_overrides: SubagentRuntimeOverrides {
+                    model: opts.model.clone(),
+                    reasoning_effort: reasoning_effort.map(|effort| effort.to_string()),
+                    output_token_budget: None,
+                    model_override_provenance: ModelOverrideProvenance::Tool {
+                        selection: self.params.task_model_selection.get(),
                     },
-                    run_in_background: false,
-                    surface_completion: false,
-                    await_to_completion: true,
-                    fork_context,
-                    owner: SubagentOwner::workflow(&self.params.run_id),
-                    cancel_token: cancel_token.clone(),
-                    spawn_root: Default::default(),
-                    tool_call_id: None,
-                }
-            };
+                    isolation,
+                    output_schema: None,
+                    ..Default::default()
+                },
+                run_in_background: false,
+                surface_completion: false,
+                await_to_completion: true,
+                fork_context,
+                owner,
+                cancel_token: cancel_token.clone(),
+                spawn_root: Default::default(),
+                tool_call_id: None,
+            }
+        };
 
         let mut attempts: u32 = 0;
         let mut total_tokens: u64 = 0;
         let mut total_duration: u64 = 0;
         let mut resume_child: Option<String> = opts.resume_from.clone();
+        let mut retry_of: Option<String> = None;
         let mut next_prompt = prompt;
         let mut fork_context = opts.fork_context;
 
@@ -583,11 +587,16 @@ impl HostService {
                 row.rebind(&retry_id);
                 retry_id
             };
+            let owner = match retry_of.take() {
+                Some(of) => SubagentOwner::workflow_retry(&self.params.run_id, of),
+                None => SubagentOwner::workflow(&self.params.run_id),
+            };
             let request = spawn_once(
                 child_id.clone(),
                 next_prompt.clone(),
                 resume_child,
                 fork_context,
+                owner,
             );
 
             let now_running = self.active_agents.fetch_add(1, Ordering::Relaxed) + 1;
@@ -660,7 +669,8 @@ impl HostService {
             match validate_contract_output(validator, &result.output) {
                 Ok(value) => break (result, value),
                 Err(err) if attempts <= SCHEMA_CONTRACT_RETRIES => {
-                    resume_child = Some(result.child_session_id.clone());
+                    retry_of = Some(result.child_session_id.clone());
+                    resume_child = retry_of.clone();
                     fork_context = false;
                     next_prompt = format!(
                         "Your final message did not satisfy the output contract: {err}\n\

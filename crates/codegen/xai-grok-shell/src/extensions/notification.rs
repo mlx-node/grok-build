@@ -785,6 +785,9 @@ pub enum SessionUpdate {
         resumed_from: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workflow_run_id: Option<String>,
+        /// On a workflow agent's output-contract retry: the attempt it retries (the child it resumes).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_of: Option<String>,
         /// Live-only opaque child address. Wire key is `agentAddress`; omitted from `updates.jsonl`.
         #[serde(
             default,
@@ -1781,6 +1784,7 @@ mod tests {
             model: None,
             resumed_from: None,
             workflow_run_id: None,
+            retry_of: None,
             agent_address: None,
         })
         .unwrap();
@@ -1848,6 +1852,7 @@ mod tests {
             model: None,
             resumed_from: None,
             workflow_run_id: None,
+            retry_of: None,
             agent_address: Some("opaque-address".into()),
         };
         let json = serde_json::to_value(&update).unwrap();
@@ -1893,6 +1898,35 @@ mod tests {
             live.pointer("/update/agentAddress"),
             Some(&serde_json::json!("opaque-address"))
         );
+    }
+
+    #[test]
+    fn subagent_spawned_retry_of_is_omitted_when_none() {
+        let spawned = |retry_of: Option<&str>| SessionUpdate::SubagentSpawned {
+            attempt_id: None,
+            subagent_id: "s".into(),
+            parent_session_id: "p".into(),
+            parent_prompt_id: None,
+            child_session_id: "c".into(),
+            subagent_type: "general-purpose".into(),
+            description: "d".into(),
+            effective_context_source: Some("resumed".into()),
+            context_normalized: false,
+            capability_mode: None,
+            persona: None,
+            role: None,
+            model: None,
+            resumed_from: Some("a1".into()),
+            workflow_run_id: Some("wf".into()),
+            retry_of: retry_of.map(str::to_owned),
+            agent_address: None,
+        };
+        let retry = serde_json::to_value(spawned(Some("a1"))).unwrap();
+        assert_eq!(retry.get("retry_of"), Some(&serde_json::json!("a1")));
+        let plain = serde_json::to_value(spawned(None)).unwrap();
+        assert!(plain.get("retry_of").is_none(), "{plain}");
+        let parsed: SessionUpdate = serde_json::from_value(plain).unwrap();
+        assert_eq!(parsed, spawned(None));
     }
 
     #[test]

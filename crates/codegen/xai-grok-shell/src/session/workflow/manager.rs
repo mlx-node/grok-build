@@ -1527,6 +1527,7 @@ mod tests {
             req.owner.is_workflow(),
             "workflow agent spawns must carry run lifecycle ownership"
         );
+        assert_eq!(req.owner.retry_of(), None);
         assert_eq!(
             req.runtime_overrides.model_override_provenance,
             ModelOverrideProvenance::Tool {
@@ -1772,8 +1773,10 @@ mod tests {
             "prompt must carry the schema contract"
         );
         assert!(req.resume_from.is_none());
+        assert_eq!(req.owner.retry_of(), None);
         assert_eq!(req.runtime_overrides.output_token_budget, None);
         let first_id = req.id.clone();
+        let first_run_id = req.owner.workflow_run_id().map(str::to_owned);
         let _ = req.result_tx.send(SubagentResult {
             success: true,
             output: std::sync::Arc::from("All files scanned, nothing found."),
@@ -1790,6 +1793,8 @@ mod tests {
             panic!("expected retry spawn event");
         };
         assert_eq!(retry.resume_from.as_deref(), Some(first_id.as_str()));
+        assert_eq!(retry.owner.retry_of(), Some(first_id.as_str()));
+        assert_eq!(retry.owner.workflow_run_id(), first_run_id.as_deref());
         assert!(retry.prompt.contains("did not satisfy the output contract"));
         assert_eq!(retry.runtime_overrides.output_token_budget, None);
         let retry_id = retry.id.clone();
@@ -1856,11 +1861,13 @@ mod tests {
             panic!("expected retry spawn event");
         };
         assert_eq!(retry.resume_from.as_deref(), Some(first_id.as_str()));
+        assert_eq!(retry.owner.retry_of(), Some(first_id.as_str()));
         let retry_id = answer(retry, "```json\n{\"ok\": true}\n```");
         let SubagentEvent::Spawn(next) = subagent_rx.recv().await.expect("script resume") else {
             panic!("expected resume spawn event");
         };
         assert_eq!(next.resume_from.as_deref(), Some(retry_id.as_str()));
+        assert_eq!(next.owner.retry_of(), None);
         answer(next, "repeated");
 
         match outcome_rx.await.unwrap() {

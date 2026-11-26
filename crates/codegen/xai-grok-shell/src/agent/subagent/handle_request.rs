@@ -1083,6 +1083,7 @@ pub(crate) async fn run_shell_child(
         model: Some(effective_model_id.0.to_string()),
         resumed_from: request.resume_from.clone(),
         workflow_run_id: request.owner.workflow_run_id().map(str::to_string),
+        retry_of: request.owner.retry_of().map(str::to_string),
         agent_address: advertised_address.clone(),
     };
     let publication_boundary = if is_wake {

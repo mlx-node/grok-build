@@ -1465,6 +1465,7 @@ pub(super) fn test_subagent_spawned_for_workflow(
         context_normalized: false,
         capability_mode: None,
         workflow_run_id,
+        retry_of: None,
         persona: None,
         role: None,
         model: None,

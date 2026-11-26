@@ -1575,3 +1575,115 @@ async fn finish_line_bills_one_attempt() {
         })
         .await;
 }
+
+/// A is a one-attempt workflow agent; B (a Task), S (a script `resume_from`) and R (A's contract retry) all resume A.
+/// Mutations that turn it red: send no retry_of (R: none), send resume_from as retry_of (B and S: A),
+/// and send the run id as retry_of (A: the run id).
+#[tokio::test(flavor = "current_thread")]
+async fn retry_spawn_names_the_attempt_it_retries() {
+    use xai_grok_test_support::Conversation;
+    use xai_grok_tools::implementations::grok_build::task::backend::{
+        ChannelBackend, SubagentBackend,
+    };
+    use xai_grok_tools::implementations::grok_build::task::coordinator::{
+        CoordinatorConfig, SubagentCoordinator,
+    };
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let workdir = tempfile::TempDir::new().expect("workdir");
+            let server = xai_grok_test_support::MockInferenceServer::start()
+                .await
+                .expect("mock server");
+            server.set_conversations([
+                Conversation::nth(1).reply("A done"),
+                Conversation::nth(2).reply("B done"),
+                Conversation::nth(3).reply("S done"),
+                Conversation::nth(4).reply("R done"),
+            ]);
+            let (parent_cmd_tx, parent_cmd_rx) = mpsc::unbounded_channel();
+            let usage_ack = tokio::task::spawn_local(acknowledge_parent_usage(parent_cmd_rx));
+            let metas: Vec<tempfile::TempDir> = (0..4)
+                .map(|_| tempfile::TempDir::new().expect("meta dir"))
+                .collect();
+            let contexts: Vec<SubagentSpawnContext> = metas
+                .iter()
+                .map(|meta| {
+                    let mut ctx = ctx_with_toggle(HashMap::new());
+                    configure_completion_harness(
+                        &mut ctx,
+                        &server,
+                        RunShellChildHarnessConfig::new(
+                            meta.path().to_path_buf(),
+                            InitialAttemptBehavior::Normal,
+                        ),
+                    );
+                    ctx.parent_cwd = workdir.path().to_path_buf();
+                    ctx.parent_cmd_tx = Some(parent_cmd_tx.clone());
+                    ctx
+                })
+                .collect();
+            drop(parent_cmd_tx);
+            let (gateway, mut gateway_rx) = test_gateway_with_receiver();
+            let (command_tx, command_rx) =
+                SubagentCoordinator::<RunShellChildTestRunner>::channel();
+            let coordinator = tokio::task::spawn_local(
+                SubagentCoordinator::from_channel(
+                    command_rx,
+                    RunShellChildTestRunner::new(contexts, false, gateway),
+                    CoordinatorConfig::default(),
+                )
+                .run(),
+            );
+            let backend = ChannelBackend::for_coordinator_session(command_tx, "setup-parent");
+            let [a_id, b_id, s_id, r_id] = [(); 4].map(|()| uuid::Uuid::now_v7().to_string());
+            let spawns = [
+                (&a_id, None, SubagentOwner::workflow("wf_retry")),
+                (&b_id, Some(&a_id), SubagentOwner::Task),
+                (&s_id, Some(&a_id), SubagentOwner::workflow("wf_retry")),
+                (
+                    &r_id,
+                    Some(&a_id),
+                    SubagentOwner::workflow_retry("wf_retry", a_id.clone()),
+                ),
+            ];
+            for (id, resume_from, owner) in spawns {
+                let mut request = auto_wake_test_request(id);
+                request.prompt = "Say done.".to_owned();
+                request.resume_from = resume_from.cloned();
+                request.owner = owner;
+                request.run_in_background = false;
+                let result = backend.spawn(request, None).await.expect("spawn");
+                assert!(result.success, "{id}: {:?}", result.error);
+            }
+            drop(backend);
+            coordinator.await.expect("coordinator");
+            usage_ack.abort();
+            assert_eq!(server.finish_scripts(), Vec::new());
+
+            let mut spawned = HashMap::new();
+            while let Ok(message) = gateway_rx.try_recv() {
+                let xai_acp_lib::AcpClientMessage::ExtNotification(args) = message else {
+                    continue;
+                };
+                let Ok(notification) =
+                    serde_json::from_str::<SessionNotification>(args.request.params.get())
+                else {
+                    continue;
+                };
+                if let SessionUpdate::SubagentSpawned {
+                    subagent_id,
+                    resumed_from,
+                    retry_of,
+                    ..
+                } = notification.update
+                {
+                    spawned.insert(subagent_id, (resumed_from, retry_of));
+                }
+            }
+            assert_eq!(spawned[&a_id], (None, None));
+            assert_eq!(spawned[&b_id], (Some(a_id.clone()), None));
+            assert_eq!(spawned[&s_id], (Some(a_id.clone()), None));
+            assert_eq!(spawned[&r_id], (Some(a_id.clone()), Some(a_id.clone())));
+        })
+        .await;
+}

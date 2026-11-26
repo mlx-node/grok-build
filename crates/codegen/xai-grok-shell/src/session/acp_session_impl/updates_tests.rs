@@ -37,6 +37,7 @@ fn spawned(
         model: Some("test-model".to_owned()),
         resumed_from: resumed_from.map(str::to_owned),
         workflow_run_id: None,
+        retry_of: None,
         agent_address: None,
     }
 }
