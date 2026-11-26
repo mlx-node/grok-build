@@ -215,21 +215,12 @@ async fn pump(
 fn take_buffered_output(out: &tokio::process::ChildStdout, buf: &mut Vec<u8>) {
     use std::io::Read;
     use std::os::fd::AsFd;
-    // The duplicate shares the pipe's non-blocking flag, so an empty pipe answers `WouldBlock` instead of blocking
+    // The duplicate shares the pipe's non-blocking flag: an empty pipe ends the read with `WouldBlock`, and what it read stays in `buf`
     let Ok(fd) = out.as_fd().try_clone_to_owned() else {
         return;
     };
-    let mut pipe = std::fs::File::from(fd);
-    let mut chunk = [0u8; 8192];
-    while (buf.len() as u64) < MAX_COMMAND_OUTPUT_BYTES {
-        let room = (MAX_COMMAND_OUTPUT_BYTES as usize - buf.len()).min(chunk.len());
-        match pipe.read(&mut chunk[..room]) {
-            Ok(0) => break,
-            Ok(read) => buf.extend_from_slice(&chunk[..read]),
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => break,
-        }
-    }
+    let room = MAX_COMMAND_OUTPUT_BYTES.saturating_sub(buf.len() as u64);
+    let _ = std::fs::File::from(fd).take(room).read_to_end(buf);
 }
 
 /// Whether the kernel refused to execute the file at all, which is what an executable script with no `#!` gets.
