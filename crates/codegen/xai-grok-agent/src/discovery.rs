@@ -1,6 +1,6 @@
 //! Searches `.grok/agents/` and `.claude/agents/` from cwd to repo root,
-//! then `~/.grok/agents/`, then `~/.claude/agents/`. Name-based dedup keeps
-//! highest priority.
+//! then the agent home's `agents/`, then `~/.claude/agents/`. Name-based dedup keeps
+//! highest priority. grok-build's `~/.grok` is never read.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -173,34 +173,20 @@ fn merge_subagents(
 }
 
 /// Discover agent definitions from the filesystem. Deduplicates by name; higher priority wins.
-/// Order: project `.grok/agents/` (cwd up to repo root), user `~/.grok`, compat `~/.claude`, then bundled.
-/// `.grok` dirs resolve from `grok_home` plus legacy `~/.grok` when `GROK_HOME` points elsewhere.
+/// Order: project `.grok/agents/` (cwd up to repo root), the agent home (`grok_home`), compat `~/.claude`, then bundled.
 pub(crate) fn user_agent_dirs(
     home: Option<&Path>,
     grok_home: Option<&Path>,
 ) -> Vec<(std::path::PathBuf, AgentScope)> {
-    // Legacy literal ~/.grok, included only when it differs from grok_home
-    // (i.e. GROK_HOME points elsewhere) so agents left in the old location are
-    // still discovered and stay consistent with scope_from_path classification.
-    let legacy_grok = home
-        .map(|h| h.join(".grok"))
-        .filter(|legacy| grok_home != Some(legacy.as_path()));
-
     let mut dirs = Vec::new();
     if let Some(g) = grok_home {
         dirs.push((g.join("agents"), AgentScope::User));
-    }
-    if let Some(l) = &legacy_grok {
-        dirs.push((l.join("agents"), AgentScope::User));
     }
     if let Some(h) = home {
         dirs.push((h.join(".claude").join("agents"), AgentScope::User));
     }
     if let Some(g) = grok_home {
         dirs.push((g.join("bundled").join("agents"), AgentScope::Bundled));
-    }
-    if let Some(l) = &legacy_grok {
-        dirs.push((l.join("bundled").join("agents"), AgentScope::Bundled));
     }
     dirs
 }
@@ -795,32 +781,45 @@ mod tests {
     }
 
     #[test]
-    fn user_agent_dirs_includes_legacy_grok_when_grok_home_differs() {
-        let home = Path::new("/home/u");
-        let grok = Path::new("/custom/grokhome");
-        let paths: Vec<_> = user_agent_dirs(Some(home), Some(grok))
+    fn user_agent_dirs_never_read_grok_builds_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path().join("workspace");
+        let home = tmp.path().join("home");
+        let agent_home = home.join(".mlx-agent");
+        let grok_user = home.join(".grok").join("agents");
+        let grok_bundled = home.join(".grok").join("bundled").join("agents");
+        fs::create_dir_all(&cwd).unwrap();
+        fs::create_dir_all(&grok_user).unwrap();
+        fs::create_dir_all(&grok_bundled).unwrap();
+        write_agent_file(
+            &grok_user,
+            "grokmark-agent.md",
+            "grokmark-agent",
+            "GROKMARK",
+        );
+        write_agent_file(
+            &grok_bundled,
+            "grokmark-bundled-agent.md",
+            "grokmark-bundled-agent",
+            "GROKMARK bundled",
+        );
+
+        let paths: Vec<_> = user_agent_dirs(Some(&home), Some(&agent_home))
             .into_iter()
             .map(|(p, _)| p)
             .collect();
-        assert!(paths.contains(&grok.join("agents")));
-        assert!(paths.contains(&home.join(".grok").join("agents")));
-        assert!(paths.contains(&home.join(".claude").join("agents")));
-        assert!(paths.contains(&grok.join("bundled").join("agents")));
-        assert!(paths.contains(&home.join(".grok").join("bundled").join("agents")));
-    }
-
-    #[test]
-    fn user_agent_dirs_dedups_legacy_when_grok_home_is_dot_grok() {
-        let home = Path::new("/home/u");
-        let grok = home.join(".grok");
-        let count = user_agent_dirs(Some(home), Some(&grok))
-            .into_iter()
-            .filter(|(p, _)| *p == grok.join("agents"))
-            .count();
         assert_eq!(
-            count, 1,
-            "no duplicate ~/.grok/agents when grok_home == ~/.grok"
+            paths,
+            vec![
+                agent_home.join("agents"),
+                home.join(".claude").join("agents"),
+                agent_home.join("bundled").join("agents"),
+            ]
         );
+        assert!(discover_with_home(&cwd, Some(&home), Some(&agent_home), true).is_empty());
+        for name in ["grokmark-agent", "grokmark-bundled-agent"] {
+            assert!(by_name_with_home(name, Some(&home), Some(&agent_home), true).is_none());
+        }
     }
 
     #[test]
