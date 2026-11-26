@@ -396,7 +396,7 @@ fn sandbox_profile_conflict_warning_from(conflicts: Vec<String>) -> Option<Termi
         fix: None,
         config_path: None,
         note: Some(format!(
-            "Grok is using the user profile. Compare `.grok/sandbox.toml` with {}, then rename \
+            "Grok is using the user profile. Compare `.mlx-agent/sandbox.toml` with {}, then rename \
              or remove the conflicting project profile. Project settings can add profile names \
              but can't redefine a user profile.",
             crate::util::display_user_grok_path(xai_grok_config::SANDBOX_CONFIG_FILENAME)
@@ -1966,7 +1966,7 @@ mod tests {
         assert!(w.config_path.is_none());
         assert!(w.note.as_deref().is_some_and(|note| {
             note.contains("rename or remove")
-                && note.contains(".grok/sandbox.toml")
+                && note.contains("Compare `.mlx-agent/sandbox.toml` with")
                 && note.contains(&crate::util::display_user_grok_path(
                     xai_grok_config::SANDBOX_CONFIG_FILENAME,
                 ))

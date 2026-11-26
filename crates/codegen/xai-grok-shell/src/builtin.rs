@@ -1,8 +1,8 @@
-//! Built-in files extracted to `~/.grok/` on startup.
+//! Built-in files extracted to the agent home on startup.
 
 const BUILTIN_FILES: &[(&str, &str)] = &[("README.md", include_str!("../README.md"))];
 
-/// Extract built-in metadata files to `~/.grok/` on startup.
+/// Extract built-in metadata files to the agent home on startup, with grok-build's paths named as this agent's.
 /// User skills under `~/.grok/skills/` are never managed here. Platform skills are delivered separately through the bundled skill cache.
 pub fn extract_builtin_files(grok_home: &std::path::Path) {
     let version = xai_grok_version::VERSION;
@@ -21,7 +21,9 @@ pub fn extract_builtin_files(grok_home: &std::path::Path) {
         let _ = std::fs::remove_file(grok_home.join(stale));
     }
 
+    let display_home = xai_dirs::display_grok_home();
     for &(filename, content) in BUILTIN_FILES {
+        let content = xai_dirs::rewrite_doc_paths(content, &display_home);
         if let Err(e) = std::fs::write(grok_home.join(filename), content) {
             tracing::debug!(error = %e, filename, "Failed to extract built-in file");
         }
@@ -215,6 +217,19 @@ mod tests {
                 std::fs::read_to_string(dir.join("user-file.txt")).unwrap(),
                 "keep"
             );
+        }
+    }
+
+    #[test]
+    fn extracted_readme_names_the_agent_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        extract_builtin_files(tmp.path());
+        let readme = std::fs::read_to_string(tmp.path().join("README.md")).unwrap();
+        assert!(include_str!("../README.md").contains("~/.grok/config.toml"));
+        let config = format!("{}/config.toml", xai_dirs::display_grok_home());
+        assert!(readme.contains(&config), "{config} missing");
+        for needle in ["~/.grok", ".grok/", "`.grok`"] {
+            assert!(!readme.contains(needle), "{needle:?} left in README.md");
         }
     }
 

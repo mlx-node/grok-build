@@ -279,7 +279,10 @@ async fn run_setup_command(json: bool) {
         }
         eprintln!("  grok setup");
         eprintln!();
-        eprintln!("Or add the key to ~/.grok/config.toml:");
+        eprintln!(
+            "Or add the key to {}:",
+            xai_grok_pager::util::display_user_grok_path(xai_grok_config::USER_CONFIG_FILENAME)
+        );
         eprintln!();
         eprintln!("  [endpoints]");
         eprintln!("  deployment_key = \"<your-key>\"");
@@ -708,9 +711,10 @@ async fn spawn_and_connect_leader(
     if !use_leader {
         anyhow::bail!(
             "`{}` requires leader mode ({}).\n\
-             Enable it with `[cli] use_leader = true` in ~/.grok/config.toml, or pass --leader.",
+             Enable it with `[cli] use_leader = true` in {}, or pass --leader.",
             door.name,
-            door.leader_mode_reason
+            door.leader_mode_reason,
+            xai_grok_pager::util::display_user_grok_path(xai_grok_config::USER_CONFIG_FILENAME)
         );
     }
     ensure_authenticated(
@@ -1734,8 +1738,9 @@ fn flag_dashboard_at_startup_if_requested(args: &mut PagerArgs) -> Result<()> {
     if !xai_grok_pager::views::dashboard::dashboard_enabled() {
         anyhow::bail!(
             "the Agent Dashboard is disabled. Enable it by removing \
-             `[dashboard] enabled = false` from ~/.grok/config.toml and \
-             unsetting GROK_AGENT_DASHBOARD=0."
+             `[dashboard] enabled = false` from {} and \
+             unsetting GROK_AGENT_DASHBOARD=0.",
+            xai_grok_pager::util::display_user_grok_path(xai_grok_config::USER_CONFIG_FILENAME)
         );
     }
     args.command = None;

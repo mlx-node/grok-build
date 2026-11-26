@@ -498,10 +498,11 @@ impl ProfileName {
                 let profile_config = config.profiles.get(name).ok_or_else(|| {
                     anyhow::anyhow!(
                         "Custom sandbox profile '{name}' not found. \
-                         Define it in ~/.grok/sandbox.toml or .grok/sandbox.toml:\n\n\
+                         Define it in {}/sandbox.toml or .mlx-agent/sandbox.toml:\n\n\
                          [profiles.{name}]\n\
                          extends = \"workspace\"\n\
-                         read_only = [\"/data\"]\n"
+                         read_only = [\"/data\"]\n",
+                        xai_dirs::display_grok_home()
                     )
                 })?;
 

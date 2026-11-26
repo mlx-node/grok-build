@@ -223,14 +223,15 @@ fn canonical_leaf(path: &Path) -> PathBuf {
 }
 
 /// Rewrite grok-build's paths in the shipped docs: `~/.grok` becomes `display_home`, and a `.grok` folder name
-/// followed by `/`, `` ` ``, `\`, `,` or a space becomes `.mlx-agent`. Names such as `.grok-plugin` are kept.
+/// followed by `/`, `` ` ``, `\`, `,`, a space, a line end or the end becomes `.mlx-agent`. Names such as
+/// `.grok-plugin` and dotted names such as `ai.x.grok` are kept.
 pub fn rewrite_doc_paths(text: &str, display_home: &str) -> String {
     const HOME: &str = "~/.grok";
     const NAME: &str = ".grok";
     let ends_name = |rest: &str| {
         rest.chars()
             .next()
-            .is_some_and(|c| matches!(c, '/' | '`' | '\\' | ',' | ' '))
+            .is_none_or(|c| matches!(c, '/' | '`' | '\\' | ',' | ' ' | '\n'))
     };
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -241,6 +242,7 @@ pub fn rewrite_doc_paths(text: &str, display_home: &str) -> String {
             out.push_str(display_home);
             rest = after;
         } else if let Some(after) = rest.strip_prefix(NAME)
+            && !out.chars().next_back().is_some_and(char::is_alphanumeric)
             && ends_name(after)
         {
             out.push_str(AGENT_DIR_NAME);
@@ -474,12 +476,13 @@ mod tests {
     #[test]
     fn rewrite_doc_paths_renames_grok_build_paths_only() {
         let text = "See ~/.grok/config.toml, `~/.grok` and ~/.grok, then <repo>/.grok/skills, `.grok`, \
-                    .grok\\hooks and .grok lists. Keep .grok-plugin/plugin.json, grok_ws_url and $GROK_HOME.";
+                    .grok\\hooks and .grok lists. Keep .grok-plugin/plugin.json, `ai.x.grok`, grok_ws_url and \
+                    $GROK_HOME.\nDisk usage for ~/.grok\n%USERPROFILE%\\.grok";
         assert_eq!(
             rewrite_doc_paths(text, "/h/.mlx-agent"),
             "See /h/.mlx-agent/config.toml, `/h/.mlx-agent` and /h/.mlx-agent, then <repo>/.mlx-agent/skills, \
-             `.mlx-agent`, .mlx-agent\\hooks and .mlx-agent lists. Keep .grok-plugin/plugin.json, grok_ws_url and \
-             $GROK_HOME."
+             `.mlx-agent`, .mlx-agent\\hooks and .mlx-agent lists. Keep .grok-plugin/plugin.json, `ai.x.grok`, \
+             grok_ws_url and $GROK_HOME.\nDisk usage for /h/.mlx-agent\n%USERPROFILE%\\.mlx-agent"
         );
     }
 

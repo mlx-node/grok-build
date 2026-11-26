@@ -78,7 +78,7 @@ Examples:
   grok wrap docker exec -it my-container bash
   grok wrap kubectl exec -it my-pod -- bash
 
-See ~/.grok/README.md for more information.
+See README.md in the agent home for more information.
 ")]
     Wrap(WrapArgs),
     /// Export a session transcript as Markdown

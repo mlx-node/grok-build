@@ -494,7 +494,7 @@ pub(crate) mod text {
     use xai_grok_sandbox::command::violation::InformationalReason;
     /// The way out of a denial no grant can lift — an unproxied connection,
     /// a path the command never named: the same words the informational card shows.
-    pub const RECOVERY_LINE: &str = "Run it in your terminal, or set the folder to `observe` in Settings (`[sandbox] mode = \"observe\"` in `.grok/workspaced.toml`).";
+    pub const RECOVERY_LINE: &str = "Run it in your terminal, or set the folder to `observe` in Settings (`[sandbox] mode = \"observe\"` in `.mlx-agent/workspaced.toml`).";
     /// Asked and denied.
     pub fn kept_blocked(violation: &Violation, followup: Option<&str>) -> String {
         let mut model_text = violation.kept_blocked_text();

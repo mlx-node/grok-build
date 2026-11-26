@@ -2814,6 +2814,48 @@ mod tests {
         assert!(first.contains("\"name\": \"send_feedback\""), "{first}");
         pretty_assertions::assert_eq!(first, render("session-b"));
     }
+    #[tokio::test]
+    async fn tool_texts_name_the_agent_folder_and_never_grok_builds() {
+        let grok_build_prefix = format!("{}:", ToolNamespace::GrokBuild);
+        let mut ids: Vec<String> = ToolRegistryBuilder::new()
+            .known_tool_ids()
+            .into_iter()
+            .filter(|id| id.starts_with(&grok_build_prefix))
+            .collect();
+        ids.sort();
+        let config = ToolServerConfig {
+            tools: ids.into_iter().map(ToolConfig::from_id).collect(),
+            behavior_preset: None,
+        };
+        let opencode_skill = ToolServerConfig {
+            tools: vec![ToolConfig::from_id("OpenCode:skill".to_string())],
+            behavior_preset: None,
+        };
+        let tmp = TempDir::new().unwrap();
+        let mut texts = String::new();
+        for config in [config, opencode_skill] {
+            let toolset = ToolRegistryBuilder::new()
+                .finalize(config, test_session_context(&tmp))
+                .expect("toolset should finalize");
+            for definition in toolset.tool_definitions() {
+                texts.push_str(&serde_json::to_string(&definition.function).unwrap());
+            }
+        }
+        for needle in [
+            "Save reusable scripts to `.mlx-agent/workflows/<name>.rhai` at the repository root. \
+             That folder is local to this machine; do not commit it.",
+            "discovered from the project `.mlx-agent/workflows/` or the user workflows folder",
+            &format!(
+                "Skills can be added in {}/skills/ or .mlx-agent/skills/",
+                crate::util::grok_home().display()
+            ),
+        ] {
+            assert!(texts.contains(needle), "missing {needle:?} in {texts}");
+        }
+        for needle in [".grok/", "`.grok`", "~/.grok"] {
+            assert!(!texts.contains(needle), "{needle:?} in {texts}");
+        }
+    }
     /// Bash mode resolves the toolset's execute tool by kind, not a hardcoded
     /// name: `run_terminal_cmd` (grok).
     #[tokio::test]

@@ -127,7 +127,8 @@ impl fmt::Display for GrantRefuse {
             Self::Unreadable => write!(
                 f,
                 "Couldn't save folder trust: the trust store could not be read. \
-                 Fix or delete ~/.grok/trusted_folders.toml, then start Grok again and press y."
+                 Fix or delete {}/trusted_folders.toml, then start Grok again and press y.",
+                xai_dirs::display_grok_home()
             ),
             Self::KeyMoved => write!(
                 f,
@@ -173,8 +174,9 @@ impl fmt::Display for GrantOutcome {
                 ..
             } => write!(
                 f,
-                "Couldn't save folder trust. Check that ~/.grok is writable, \
-                 then run `grok --trust` in this folder."
+                "Couldn't save folder trust. Check that {} is writable, \
+                 then run `grok --trust` in this folder.",
+                xai_dirs::display_grok_home()
             ),
             Self::Refused { reason } => write!(f, "{reason}"),
             Self::Granted { .. } | Self::AlreadyDurable { .. } => {
@@ -1305,10 +1307,11 @@ mod tests {
         };
         let text = unread.to_string();
         assert!(text.contains("trust store could not be read"), "{text}");
-        assert!(
-            text.contains("Fix or delete ~/.grok/trusted_folders.toml"),
-            "{text}"
+        let store = format!(
+            "Fix or delete {}/trusted_folders.toml",
+            xai_dirs::display_grok_home()
         );
+        assert!(text.contains(&store), "{text}");
         let no_home = GrantOutcome::Refused {
             reason: GrantRefuse::NoHome,
         };

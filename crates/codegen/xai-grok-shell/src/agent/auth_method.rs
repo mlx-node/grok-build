@@ -301,7 +301,12 @@ pub(crate) fn session_token_auth_gate(
 pub const AUTH_ERROR_SESSION_EXPIRED: &str =
     "Session expired. Run `grok login` to re-authenticate.";
 
-pub const AUTH_ERROR_API_KEY: &str = "Authentication failed. Run `grok login`, set XAI_API_KEY, or add api_key to ~/.grok/config.toml.";
+pub fn auth_error_api_key() -> String {
+    format!(
+        "Authentication failed. Run `grok login`, set XAI_API_KEY, or add api_key to {}/config.toml.",
+        xai_dirs::display_grok_home()
+    )
+}
 
 /// Next ACP method id when `cached_token` cannot proceed (missing / expired / legacy WebLogin), or `None` when fallthrough is forbidden.
 /// Unpinned: prefer non-interactive `xai.api_key` when advertiseable, else interactive `grok.com`. Pinned `oidc`: **no** fallthrough to api_key; return `None` so the caller fails auth.
@@ -347,7 +352,10 @@ pub(crate) fn cached_token_auth_method() -> acp::AuthMethod {
             acp::AuthMethodId::new(CACHED_TOKEN_AUTH_METHOD_ID),
             "cached_token".to_string(),
         )
-        .description(Some("Cached token from ~/.grok/auth.json".to_string())),
+        .description(Some(format!(
+            "Cached token from {}/auth.json",
+            xai_dirs::display_grok_home()
+        ))),
     )
 }
 

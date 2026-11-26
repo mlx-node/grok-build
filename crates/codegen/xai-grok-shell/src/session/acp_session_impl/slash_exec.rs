@@ -129,9 +129,10 @@ impl SessionActor {
             }
             BuiltinAction::HooksAdd { path } => {
                 if path.is_empty() {
-                    self.send_host_turn_slash_command_output(
-                        "Usage: /hooks add <path>\nProvide a path to a hook JSON file or directory under ~/.grok/.",
-                    )
+                    self.send_host_turn_slash_command_output(&format!(
+                        "Usage: /hooks add <path>\nProvide a path to a hook JSON file or directory under {}.",
+                        xai_dirs::display_grok_home()
+                    ))
                     .await;
                 } else {
                     // CWE-427: Use shared add_hooks_path() which validates

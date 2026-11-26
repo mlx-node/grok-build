@@ -61,7 +61,7 @@ impl SlashCommand for DocsCommand {
         match find_doc(trimmed) {
             Some(doc) => CommandResult::Action(Action::ShowReleaseNotes {
                 title: doc.title.into(),
-                content: doc.content.into(),
+                content: doc.display_content(),
             }),
             None => CommandResult::Error(format!(
                 "Unknown docs target {trimmed:?}. Try /docs, /docs web, or a guide title (e.g. /docs Getting Started)."
@@ -167,6 +167,26 @@ mod tests {
             }
             other => panic!("expected ShowReleaseNotes, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_guide_and_the_guide_picker_name_the_agent_home() {
+        let models = ModelState::default();
+        let mut ctx = make_ctx(&models);
+        let config = format!("{}/config.toml", xai_dirs::display_grok_home());
+        match DocsCommand.run(&mut ctx, "Configuration") {
+            CommandResult::Action(Action::ShowReleaseNotes { content, .. }) => {
+                assert!(content.contains(&config), "{config} missing");
+                assert!(!content.contains("~/.grok"));
+            }
+            other => panic!("expected ShowReleaseNotes, got {other:?}"),
+        }
+        let entry = crate::docs::default_howto_entries()
+            .into_iter()
+            .find(|entry| entry.title == "Configuration")
+            .unwrap();
+        assert!(entry.content.contains(&config), "{config} missing");
+        assert!(!entry.content.contains("~/.grok"));
     }
 
     #[test]

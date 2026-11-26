@@ -15,9 +15,9 @@ impl SessionActor {
             let method_guard = self.auth_method_id.load();
             let method = method_guard.as_deref();
             let msg = if method.is_some_and(crate::agent::auth_method::is_session_based_method) {
-                crate::agent::auth_method::AUTH_ERROR_SESSION_EXPIRED
+                crate::agent::auth_method::AUTH_ERROR_SESSION_EXPIRED.to_owned()
             } else {
-                crate::agent::auth_method::AUTH_ERROR_API_KEY
+                crate::agent::auth_method::auth_error_api_key()
             };
             xai_grok_telemetry::unified_log::error(
                 "sampling auth error",

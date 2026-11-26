@@ -703,7 +703,10 @@ fn build_rows(
     if !plan.global_items.is_empty() {
         let scope_start = flat_index;
         let scope_key = format!("scope:{:?}", Scope::Global);
-        let label = "Global  ~/.grok/config.toml".to_string();
+        let label = format!(
+            "Global  {}",
+            crate::util::display_user_grok_path(xai_grok_config::USER_CONFIG_FILENAME)
+        );
         // Placeholder header; flat_indices filled after children are pushed.
         let scope_header_pos = rows.len();
         rows.push(Row::ScopeHeader {

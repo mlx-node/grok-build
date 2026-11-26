@@ -155,7 +155,7 @@ pub(super) fn apply_hooks_to_dir(
         info!(
             path = %target.display(),
             count,
-            "Wrote imported hooks to .grok/hooks/imported-from-claude.json"
+            "Wrote imported hooks to .mlx-agent/hooks/imported-from-claude.json"
         );
     }
 
