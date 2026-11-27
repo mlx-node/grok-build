@@ -280,7 +280,7 @@ fn resolve_refuses_chain_past_darwin_maxsymlinks() {
     let (head, leaf) = symlink_chain(dir.path(), 33);
 
     let err = resolve_atomic_destination(&head).expect_err("Darwin ELOOP length");
-    assert_eq!(std::io::ErrorKind::InvalidInput, err.kind());
+    assert_follow_refused(&err);
     assert!(
         std::fs::symlink_metadata(&head)
             .expect("head")
