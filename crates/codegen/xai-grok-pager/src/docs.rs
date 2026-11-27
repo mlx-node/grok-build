@@ -356,6 +356,7 @@ mod tests {
         assert_eq!(titles.len(), USER_GUIDE.len() + REFERENCE_DOCS.len());
     }
 
+    #[serial_test::serial(GROK_HOME)]
     #[test]
     fn extract_writes_docs_and_cleans_stale() {
         let tmp = tempfile::tempdir().unwrap();

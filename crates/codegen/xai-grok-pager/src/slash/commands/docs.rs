@@ -169,6 +169,7 @@ mod tests {
         }
     }
 
+    #[serial_test::serial(GROK_HOME)]
     #[test]
     fn a_guide_and_the_guide_picker_name_the_agent_home() {
         let models = ModelState::default();
