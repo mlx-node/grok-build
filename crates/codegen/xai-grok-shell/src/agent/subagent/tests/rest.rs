@@ -2199,6 +2199,33 @@ async fn read_parent_sampling_config_keeps_auto_when_catalog_has_slug_key_only()
     assert_eq!(config.request_compression, xai_grok_sampler::RequestCompression::Zstd);
 }
 #[tokio::test]
+async fn read_parent_sampling_config_asks_the_catalog_for_the_extra_body_capability() {
+    let base_url = test_sampling_config("qwen").base_url;
+    for mlx in [false, true] {
+        let mut entry = test_model_entry("qwen");
+        entry.info.api_backend = crate::sampling::ApiBackend::Messages;
+        entry.info.base_url = base_url.clone();
+        entry.info.extra_body_reasoning_effort = mlx;
+        entry.info.discovery_base_url = Some(base_url.clone());
+        let mut models = indexmap::IndexMap::new();
+        models.insert("qwen".to_string(), entry);
+        let ctx = ctx_with_parent_chat_state("qwen", "qwen", "qwen", models);
+        ctx.parent_chat_state
+            .as_ref()
+            .unwrap()
+            .update_sampling_config(xai_grok_sampling_types::SamplingConfig {
+                api_backend: crate::sampling::ApiBackend::Messages,
+                ..test_sampling_config("qwen")
+            });
+        let (config, _) = read_parent_sampling_config(&ctx).await;
+        let gate = config
+            .extra_body_effort_gate
+            .expect("the inherited config carries the gate");
+        assert_eq!(gate.reads_extra_body_effort(&config.model, &config.base_url), mlx);
+        assert!(!gate.reads_extra_body_effort(&config.model, "https://elsewhere.test/v1"));
+    }
+}
+#[tokio::test]
 async fn read_parent_sampling_config_fallback_uses_session_model_id() {
     let mut models = indexmap::IndexMap::new();
     models.insert("composer-2-fast".to_string(), test_model_entry("composer-2-fast"));

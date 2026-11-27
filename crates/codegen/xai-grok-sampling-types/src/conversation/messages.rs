@@ -72,10 +72,15 @@ fn apply_cache_breakpoints(
     }
 }
 
-pub fn build_messages_request(req: &ConversationRequest) -> crate::messages::MessagesRequest {
+/// `extra_body_reasoning_effort`: the endpoint reads the effort from `extra_body.reasoning_effort` (an mlx-node engine that lists `reasoningEfforts`); a strict Messages endpoint refuses the unknown field.
+pub fn build_messages_request(
+    req: &ConversationRequest,
+    extra_body_reasoning_effort: bool,
+) -> crate::messages::MessagesRequest {
     use crate::messages::{
-        ContentBlock, ImageSource, Message, MessageContent, MessageRole, MessagesRequest,
-        OutputConfig, SystemParam, TextBlock, ToolChoiceParam, ToolParam, ToolResultContent,
+        ContentBlock, ExtraBody, ImageSource, Message, MessageContent, MessageRole,
+        MessagesRequest, OutputConfig, SystemParam, TextBlock, ToolChoiceParam, ToolParam,
+        ToolResultContent,
     };
 
     let mut system_blocks: Vec<TextBlock> = Vec::new();
@@ -323,18 +328,30 @@ pub fn build_messages_request(req: &ConversationRequest) -> crate::messages::Mes
             schema: schema.clone(),
         });
 
-    // thinking is driven by reasoning_effort only, not by json_schema.
-    let thinking = effort
-        .as_ref()
-        .map(|_| crate::messages::ThinkingConfig::Adaptive {
+    // thinking is driven by reasoning_effort and an explicit budget only, not by json_schema.
+    let thinking = match (req.thinking_budget_tokens, &effort) {
+        (Some(budget_tokens), _) => {
+            Some(crate::messages::ThinkingConfig::Enabled { budget_tokens })
+        }
+        (None, Some(_)) => Some(crate::messages::ThinkingConfig::Adaptive {
             display: Some(crate::messages::ThinkingDisplay::Summarized),
-        });
+        }),
+        (None, None) => None,
+    };
 
     let output_config = if effort.is_some() || format.is_some() {
         Some(OutputConfig { effort, format })
     } else {
         None
     };
+
+    let extra_body = req
+        .reasoning_effort
+        .filter(|_| extra_body_reasoning_effort)
+        .and_then(|e| e.to_messages_extra_body())
+        .map(|level| ExtraBody {
+            reasoning_effort: Some(level.to_string()),
+        });
 
     MessagesRequest {
         model: req.model.clone().unwrap_or_default(),
@@ -351,6 +368,7 @@ pub fn build_messages_request(req: &ConversationRequest) -> crate::messages::Mes
         thinking,
         output_config,
         metadata: None,
+        extra_body,
     }
 }
 

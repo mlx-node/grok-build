@@ -796,6 +796,7 @@ impl SessionActor {
             compaction_at_tokens: self.compaction_at_tokens.get(),
             // The sampler sends the opt-in header itself when this is set.
             doom_loop_recovery: self.doom_loop_recovery,
+            extra_body_effort_gate: Some(self.models_manager.extra_body_effort_gate()),
             header_injector: Some(std::sync::Arc::new(TraceContextInjector)),
         }
     }
@@ -978,6 +979,10 @@ impl SessionActor {
             creds.alpha_test_key.clone(),
             creds.client_version.clone(),
         )
+        .map(|cfg| xai_grok_sampler::SamplerConfig {
+            extra_body_effort_gate: Some(self.models_manager.extra_body_effort_gate()),
+            ..cfg
+        })
     }
 
     /// Resolve a dedicated sampler for the Auto-mode classifier model `slug`, stamping session-local auth/attribution like image-describe.

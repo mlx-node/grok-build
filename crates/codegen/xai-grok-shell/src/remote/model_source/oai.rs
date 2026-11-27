@@ -89,10 +89,14 @@ impl ModelSource for OaiModelSource {
             models_response.data.len(),
             self.endpoint.url
         );
+        let discovery_base_url = self.endpoint.base_url();
         let mut models = Vec::with_capacity(models_response.data.len());
         for (idx, value) in models_response.data.into_iter().enumerate() {
             match parse_remote_model_value(&value, &self.inference_base_url) {
-                Some(model) => models.push(model),
+                Some(mut model) => {
+                    model.discovery_base_url.clone_from(&discovery_base_url);
+                    models.push(model);
+                }
                 None => {
                     tracing::warn!(
                         "Skipping model at index {}: missing required field ('model' or 'context_window') or invalid types",
@@ -126,6 +130,14 @@ struct ListModelsEndpoint {
     auth: EndpointAuth,
 }
 impl ListModelsEndpoint {
+    /// The base URL this list belongs to: `url` without its trailing `/models`, else `None`.
+    fn base_url(&self) -> Option<String> {
+        self.url
+            .trim_end_matches('/')
+            .strip_suffix("/models")
+            .map(|base| base.trim_end_matches('/').to_owned())
+            .filter(|base| !base.is_empty())
+    }
     fn from_endpoints(endpoints: &EndpointsConfig, fetch_auth: ModelFetchAuth) -> Self {
         if endpoints.has_custom_endpoint() {
             Self {
@@ -167,11 +179,12 @@ mod tests {
             )
             .unwrap(),
         );
+        let proxy_models = format!("{}/models", EndpointsConfig::default().proxy_url());
         let session = ListModelsEndpoint::from_endpoints(&cfg, ModelFetchAuth::Session);
-        assert_eq!(session.url, "https://cli-chat-proxy.grok.com/v1/models");
+        assert_eq!(session.url, proxy_models);
         assert_eq!(session.auth, EndpointAuth::Session);
         let deployment = ListModelsEndpoint::from_endpoints(&cfg, ModelFetchAuth::Deployment);
-        assert_eq!(deployment.url, "https://cli-chat-proxy.grok.com/v1/models");
+        assert_eq!(deployment.url, proxy_models);
         assert_eq!(deployment.auth, EndpointAuth::Session);
         let api = ListModelsEndpoint::from_endpoints(&cfg, ModelFetchAuth::ApiKey);
         assert_eq!(api.url, "https://inference.acme-corp.example/xai/v1/models");
@@ -179,7 +192,7 @@ mod tests {
         let default = EndpointsConfig::from_config_value(&toml::Value::Table(Default::default()));
         assert_eq!(
             ListModelsEndpoint::from_endpoints(&default, ModelFetchAuth::ApiKey).url,
-            "https://api.x.ai/v1/models"
+            format!("{}/models", EndpointsConfig::default().xai_api_base_url)
         );
         let custom = EndpointsConfig::from_config_value(
             &toml::from_str(
@@ -191,6 +204,27 @@ mod tests {
         let ep = ListModelsEndpoint::from_endpoints(&custom, ModelFetchAuth::Session);
         assert_eq!(ep.url, "https://models.acme.com/v1/models");
         assert_eq!(ep.auth, EndpointAuth::ApiKey);
+    }
+    #[test]
+    fn the_discovery_base_is_the_list_url_without_its_models_path() {
+        for (url, base) in [
+            (
+                "http://127.0.0.1:8080/v1/models",
+                Some("http://127.0.0.1:8080/v1"),
+            ),
+            (
+                "http://127.0.0.1:8080/v1/models/",
+                Some("http://127.0.0.1:8080/v1"),
+            ),
+            ("https://models.acme.com/catalog.json", None),
+            ("/models", None),
+        ] {
+            let endpoint = ListModelsEndpoint {
+                url: url.to_owned(),
+                auth: EndpointAuth::ApiKey,
+            };
+            assert_eq!(endpoint.base_url().as_deref(), base, "{url}");
+        }
     }
     #[test]
     #[serial_test::serial]

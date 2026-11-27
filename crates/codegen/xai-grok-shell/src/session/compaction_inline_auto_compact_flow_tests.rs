@@ -2127,3 +2127,216 @@ async fn get_transcript_path_returns_some_when_file_exists() {
         })
         .await;
 }
+/// Unsigned reasoning from the local server, as the Messages main loop replays it.
+fn unsigned_reasoning_history(final_query: String) -> Vec<ConversationItem> {
+    let reasoning = |text: &str| {
+        ConversationItem::Reasoning(xai_grok_sampling_types::synthesized_reasoning_item(text))
+    };
+    let tool_call = |id: &str| {
+        ConversationItem::assistant_tool_calls(vec![xai_grok_sampling_types::ToolCall {
+            id: std::sync::Arc::<str>::from(id),
+            name: "grep".to_string(),
+            arguments: std::sync::Arc::<str>::from(r#"{"pattern":"fn main"}"#),
+        }])
+    };
+    let filler = "x".repeat(2_000);
+    vec![
+        ConversationItem::system("sys"),
+        ConversationItem::user(format!("u0 {filler}")),
+        reasoning("look for main first"),
+        tool_call("c1"),
+        ConversationItem::tool_result("c1", format!("src/main.rs:1 {filler}")),
+        reasoning("found it, report"),
+        ConversationItem::assistant(format!("a0 {filler}")),
+        ConversationItem::user(final_query),
+    ]
+}
+async fn route_messages_compaction_to_mock_server(
+    actor: &SessionActor,
+) -> xai_grok_test_support::MockInferenceServer {
+    let server = route_compaction_to_mock_server(actor, "Summary of prior work. ".repeat(30)).await;
+    let mut cfg = actor.chat_state_handle.get_sampling_config().await.unwrap();
+    cfg.api_backend = xai_grok_sampling_types::ApiBackend::Messages;
+    actor.chat_state_handle.update_sampling_config(cfg);
+    server
+}
+fn first_messages_body(server: &xai_grok_test_support::MockInferenceServer) -> serde_json::Value {
+    let requests = server.requests();
+    let Some(body) = requests
+        .iter()
+        .find(|r| r.path == "/v1/messages")
+        .and_then(|r| r.body.clone())
+    else {
+        panic!(
+            "expected a /v1/messages request, got {:?}",
+            requests.iter().map(|r| &r.path).collect::<Vec<_>>()
+        );
+    };
+    body
+}
+fn thinking_block_count(body: &serde_json::Value) -> usize {
+    j(body, "messages")
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m.get("content").and_then(serde_json::Value::as_array))
+        .flatten()
+        .filter(|b| b.get("type").and_then(serde_json::Value::as_str) == Some("thinking"))
+        .count()
+}
+/// `run_compact_inner` sends unsigned reasoning on Messages, so the summary request shares the main loop's prefix.
+#[tokio::test(flavor = "current_thread")]
+async fn messages_compaction_request_keeps_unsigned_reasoning() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _gateway_rx) = mpsc::unbounded_channel();
+            let (persistence_tx, _persistence_rx) = mpsc::unbounded_channel();
+            let actor =
+                Arc::new(create_test_actor(50_000, 200_000, 85, gateway_tx, persistence_tx).await);
+            let server = route_messages_compaction_to_mock_server(&actor).await;
+            actor
+                .chat_state_handle
+                .replace_conversation(unsigned_reasoning_history("final query".to_string()));
+            let result = actor.run_compact().await;
+            assert!(result.is_ok(), "compaction should succeed: {result:?}");
+            assert_eq!(
+                thinking_block_count(&first_messages_body(&server)),
+                2,
+                "the summary request must replay both unsigned reasoning items"
+            );
+        })
+        .await;
+}
+/// Prefire pass 1 sends unsigned reasoning on Messages, as `run_compact_inner` does.
+#[tokio::test(flavor = "current_thread")]
+async fn messages_prefire_pass1_keeps_unsigned_reasoning() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _gateway_rx) = mpsc::unbounded_channel();
+            let (persistence_tx, _persistence_rx) = mpsc::unbounded_channel();
+            let actor =
+                Arc::new(create_test_actor(50_000, 200_000, 85, gateway_tx, persistence_tx).await);
+            {
+                let mut agent_slot = actor.agent.borrow_mut();
+                let agent = &*agent_slot;
+                let mut policy = agent.compaction_policy().clone();
+                policy.two_pass_enabled = true;
+                *agent_slot = xai_grok_agent::Agent::new(
+                    agent.definition().clone(),
+                    agent.prompt_context().clone(),
+                    agent.system_prompt().to_string(),
+                    std::sync::Arc::clone(agent.tool_bridge()),
+                    agent.reminder_policy().clone(),
+                    policy,
+                    vec![],
+                    false,
+                );
+            }
+            let server = route_messages_compaction_to_mock_server(&actor).await;
+            actor
+                .chat_state_handle
+                .replace_conversation(unsigned_reasoning_history(format!(
+                    "final query {}",
+                    "y".repeat(2_000)
+                )));
+            actor.run_prefire_pass1().await;
+            assert_eq!(
+                thinking_block_count(&first_messages_body(&server)),
+                2,
+                "the pass-1 request must replay both unsigned reasoning items"
+            );
+        })
+        .await;
+}
+/// `auto_compact_completed.tokens_after` and the `totalTokens` the next update sends are the new history's reseeded count:
+/// its estimate times the last response's real/estimate ratio, capped at the pre-compaction total.
+/// Case `app` is the app's shape (real usage ≈ estimate + tool overhead); case `e1` is E1's scripted engine
+/// (235,929 reported for a ~2K-token history the summary does not shrink), whose ratio pushes the reseed to the cap.
+/// Mutation that turns `app` red: `ChatStateActor::replace_conversation` keeps the old `total_tokens` (no reseed).
+#[tokio::test(flavor = "current_thread")]
+async fn auto_compact_reports_the_new_history_tokens() {
+    use crate::extensions::notification::SessionUpdate as XaiSessionUpdate;
+    use crate::session::storage::SessionUpdate;
+    async fn compact(history: Vec<ConversationItem>, reported_total: u64) -> (u64, u64, u64, u64) {
+        let (gateway_tx, _gateway_rx) = mpsc::unbounded_channel();
+        let (persistence_tx, mut persistence_rx) = mpsc::unbounded_channel();
+        let actor = Arc::new(create_test_actor(0, 262_144, 90, gateway_tx, persistence_tx).await);
+        let _server =
+            route_compaction_to_mock_server(&actor, "Summary of prior work. ".repeat(30)).await;
+        actor.chat_state_handle.replace_conversation(history);
+        actor.chat_state_handle.record_token_usage(reported_total);
+        let estimate_before = xai_chat_state::estimate_conversation_tokens(
+            &actor.chat_state_handle.get_conversation().await,
+        );
+        actor
+            .run_compact_only(
+                AutoCompactTriggerInfo {
+                    tokens_used: reported_total,
+                    context_window: 262_144,
+                    percentage: 90,
+                    reason_override: None,
+                },
+                false,
+            )
+            .await
+            .expect("auto compaction succeeds");
+        let mut tokens_after = None;
+        while let Ok(msg) = persistence_rx.try_recv() {
+            if let PersistenceMsg::Update(SessionUpdate::Xai(notif)) = msg
+                && let XaiSessionUpdate::AutoCompactCompleted {
+                    tokens_after: after,
+                    ..
+                } = notif.update
+            {
+                tokens_after = Some(after);
+            }
+        }
+        let new_estimate = xai_chat_state::estimate_conversation_tokens(
+            &actor.chat_state_handle.get_conversation().await,
+        );
+        let meta_total = actor.chat_state_handle.get_estimated_total_tokens().await;
+        (
+            tokens_after.expect("auto_compact_completed sent"),
+            meta_total,
+            estimate_before,
+            new_estimate,
+        )
+    }
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let filler = "x".repeat(16_800);
+            let mut app_history = vec![ConversationItem::system("sys")];
+            for i in 0..25 {
+                app_history.push(ConversationItem::user(format!("u{i} {filler}")));
+                app_history.push(ConversationItem::assistant(format!("a{i} {filler}")));
+            }
+            app_history.push(ConversationItem::user("final query"));
+            let (after, meta_total, estimate_before, new_estimate) =
+                compact(app_history, 235_929).await;
+            let expected =
+                (new_estimate as f64 * (235_929.0 / estimate_before as f64)).round() as u64;
+            assert_eq!(
+                after, expected,
+                "tokens_after = new history estimate x last ratio"
+            );
+            assert!(after < 235_929 / 10, "the meter must drop at once: {after}");
+            assert_eq!(
+                meta_total, after,
+                "the next update's totalTokens is the same count"
+            );
+
+            let e1_history = vec![
+                ConversationItem::system("s".repeat(8_000)),
+                ConversationItem::user("one"),
+                ConversationItem::assistant("one"),
+                ConversationItem::user("two"),
+            ];
+            let (after, meta_total, _, _) = compact(e1_history, 235_939).await;
+            assert_eq!(after, 235_939, "a ratio this large reseeds to the cap");
+            assert_eq!(meta_total, after);
+        })
+        .await;
+}

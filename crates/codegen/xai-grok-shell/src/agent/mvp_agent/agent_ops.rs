@@ -122,6 +122,7 @@ impl MvpAgent {
                     primary.client_identifier.clone(),
                     primary.max_retries,
                 );
+                cfg.extra_body_effort_gate = Some(self.models_manager.extra_body_effort_gate());
                 cfg
             }
             None => {
@@ -2152,6 +2153,7 @@ impl MvpAgent {
             user_id,
         );
         config.origin_client = origin_client;
+        config.extra_body_effort_gate = Some(self.models_manager.extra_body_effort_gate());
         config
     }
     /// Resolve sampling config for a model by ID, falling back to the global default on resolution failure.
@@ -2273,6 +2275,7 @@ impl MvpAgent {
             alpha_test_key.as_deref(),
             &cfg.base_url,
         );
+        cfg.extra_body_effort_gate = Some(self.models_manager.extra_body_effort_gate());
         Some(cfg)
     }
     /// The caller at the process boundary renders the [`crate::agent::init::BootstrapError`] and exits.
@@ -4423,6 +4426,10 @@ impl MvpAgent {
             .borrow()
             .resolve_long_reasoning_reminder();
         let compaction_tool_choice = self.cfg.borrow().resolve_compaction_tool_choice();
+        let compaction_thinking_budget_tokens = self
+            .cfg
+            .borrow()
+            .resolve_compaction_thinking_budget_tokens();
         let auto_update = self.cfg.borrow().cli.auto_update;
         let client_type = *self.client_type.borrow();
         let buffering_settings = self.buffering_settings.borrow().clone();
@@ -4891,6 +4898,7 @@ impl MvpAgent {
                     compaction_verbatim_input,
                     long_reasoning_reminder,
                     compaction_tool_choice,
+                    compaction_thinking_budget_tokens,
                     two_pass_enabled,
                     buffering_settings,
                     origin_client.clone(),

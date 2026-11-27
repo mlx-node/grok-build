@@ -33,6 +33,32 @@ pub(crate) fn resolve_compaction_tool_choice_from(
         .unwrap_or_default()
 }
 
+/// Thinking tokens the summary call may spend on a Messages backend; the main loop keeps its own setting.
+pub const DEFAULT_COMPACTION_THINKING_BUDGET_TOKENS: u32 = 4096;
+
+/// The smallest `thinking.budget_tokens` a Messages backend accepts.
+const MIN_THINKING_BUDGET_TOKENS: u32 = 1024;
+
+pub(crate) const ENV_COMPACTION_THINKING_BUDGET_TOKENS: &str =
+    "GROK_COMPACTION_THINKING_BUDGET_TOKENS";
+
+/// Precedence: env `GROK_COMPACTION_THINKING_BUDGET_TOKENS`, then config `features.compaction_thinking_budget_tokens`, then the default.
+/// `0` sends no budget, so the session's own thinking setting (or the server's default) applies; other values are raised to the Messages minimum.
+pub(crate) fn resolve_compaction_thinking_budget_tokens_from(
+    env: Option<&str>,
+    config: Option<u32>,
+) -> u32 {
+    let resolved = env
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .or(config)
+        .unwrap_or(DEFAULT_COMPACTION_THINKING_BUDGET_TOKENS);
+    if resolved == 0 {
+        0
+    } else {
+        resolved.max(MIN_THINKING_BUDGET_TOKENS)
+    }
+}
+
 pub(crate) const ENV_AUTO_COMPACT_THRESHOLD_PERCENT: &str = "GROK_AUTO_COMPACT_THRESHOLD_PERCENT";
 
 /// Precedence (highest first): env `GROK_AUTO_COMPACT_THRESHOLD_PERCENT` user TOML `[model.<id>].auto_compact_threshold_percent` (`cfg.config_models`, the merge of user and managed `[model.<id>]` sections) user TOML `[session].auto_compact_threshold_percent` remote settings per-model `ModelInfo.auto_compact_threshold_percent` (kept out of `ConfigModelOverride::apply` so the user and remote per-model tiers stay distinct) remote settings global `RemoteSettings.auto_compact_threshold_percent` default `DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT`
@@ -88,9 +114,8 @@ pub(crate) fn resolve_auto_compact_threshold_percent_from_tiers(
         .unwrap_or(DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT)
 }
 
-/// Fleet p99 of successful compactions is ~181s (≈225s at 400K+ input).
-/// So 300s clears the legit tail with margin while cutting a runaway from the ~600s deadline.
-pub const DEFAULT_COMPACTION_WALL_CLOCK_BUDGET_SECS: u64 = 300;
+/// `0`: no wall clock. A local model can need 20+ minutes to read a long history and write the summary; the stream idle check still catches a stall.
+pub const DEFAULT_COMPACTION_WALL_CLOCK_BUDGET_SECS: u64 = 0;
 
 /// Below this, a configured budget is almost certainly a misconfig (fleet success p99 ~181s); logged at `warn`, not clamped.
 const COMPACTION_WALL_CLOCK_BUDGET_WARN_SECS: u64 = 120;
@@ -123,10 +148,26 @@ mod compaction_wall_clock_budget_tests {
     // Assumes GROK_COMPACTION_WALL_CLOCK_SECS is unset in the test env.
     #[test]
     fn default_global_disable_and_no_clamp() {
-        assert_eq!(resolve(None), 300); // client default
+        assert_eq!(resolve(None), 0); // client default: no wall clock
         assert_eq!(resolve(Some(450)), 450); // server global wins
         assert_eq!(resolve(Some(0)), 0); // 0 explicitly disables (no clamp)
         assert_eq!(resolve(Some(5)), 5); // low values pass through (warned, not clamped)
+    }
+}
+
+#[cfg(test)]
+mod compaction_thinking_budget_tests {
+    use super::resolve_compaction_thinking_budget_tokens_from as resolve;
+
+    #[test]
+    fn default_env_config_and_floor() {
+        assert_eq!(resolve(None, None), 4096);
+        assert_eq!(resolve(None, Some(8192)), 8192);
+        assert_eq!(resolve(Some("2048"), Some(8192)), 2048);
+        assert_eq!(resolve(Some("garbage"), Some(8192)), 8192);
+        assert_eq!(resolve(Some("0"), None), 0);
+        assert_eq!(resolve(None, Some(0)), 0);
+        assert_eq!(resolve(None, Some(100)), 1024);
     }
 }
 

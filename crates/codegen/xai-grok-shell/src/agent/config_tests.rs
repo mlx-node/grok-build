@@ -445,7 +445,7 @@ fn new_from_toml_cfg_restores_web_search_and_session_summary_models() {
     );
 }
 #[test]
-fn hidden_default_web_search_resolution_is_explicit_and_responses_only() {
+fn hidden_default_web_search_resolution_is_explicit_and_messages_only() {
     let endpoints = EndpointsConfig::default();
     let resolved = resolve_web_search_sampling_config(
         crate::models::default_web_search_model(),
@@ -459,7 +459,7 @@ fn hidden_default_web_search_resolution_is_explicit_and_responses_only() {
     .expect("hidden default web search model should resolve");
     assert_eq!(resolved.model, crate::models::default_web_search_model());
     assert_eq!(resolved.base_url, endpoints.proxy_url());
-    assert_eq!(resolved.api_backend, ApiBackend::Responses);
+    assert_eq!(resolved.api_backend, ApiBackend::Messages);
     assert_eq!(
         resolved.api_key.as_deref(),
         Some("session-token"),
@@ -599,7 +599,7 @@ fn session_resolver_is_not_stamped_onto_third_party_samplers() {
         Some("root-group")
     );
     let mut first_party = SamplerConfig {
-        base_url: EndpointsConfig::default().resolve_inference_base_url(),
+        base_url: "https://api.x.ai/v1".into(),
         ..SamplerConfig::default()
     };
     stamp_session_local_sampler_fields(&mut first_party, &session_cfg, None, None);
@@ -1715,6 +1715,99 @@ fn resolve_model_auth_facts_empty_model_id_is_unknown() {
         resolve_model_auth_facts_and_provider("").0.byok,
         ModelByok::Unknown
     );
+}
+const LISTING_BASE_URL: &str = "http://127.0.0.1:1/v1";
+/// The row `LISTING_BASE_URL`'s `/models` returns.
+fn messages_row(owned_by: &str, reasoning_efforts: Option<serde_json::Value>) -> ModelEntry {
+    let mut row = serde_json::json!({
+        "id": "qwen3.6-27b",
+        "object": "model",
+        "created": 1,
+        "owned_by": owned_by,
+        "context_window": 262_144,
+        "api_backend": "messages",
+        "model_family": "qwen3_5",
+    });
+    if let Some(efforts) = reasoning_efforts {
+        row["reasoningEfforts"] = efforts;
+    }
+    let mut parsed = crate::remote::client::parse_remote_model_value(&row, LISTING_BASE_URL)
+        .expect("row parses");
+    parsed.discovery_base_url = Some(LISTING_BASE_URL.to_owned());
+    ModelEntry {
+        info: ModelInfo::from_config(&parsed),
+        ..test_model_entry("qwen3.6-27b", LISTING_BASE_URL, None, None, None)
+    }
+}
+/// Whether the request `sampling_config_for_model` builds for `entry` carries `extra_body`, against a catalog of `entry`.
+fn sends_extra_body(entry: &ModelEntry) -> bool {
+    let catalog = crate::agent::remote_config::ModelsManager::default();
+    catalog.insert_test_entry("qwen3.6-27b", entry.clone());
+    let config = sampling_config_for_model(
+        entry,
+        resolve_credentials(entry, None),
+        None,
+        None,
+        None,
+        None,
+    );
+    catalog.reads_extra_body_effort(&config.model, &config.base_url)
+}
+#[test]
+#[serial]
+fn only_an_mlx_node_row_that_lists_levels_reads_the_effort_from_extra_body() {
+    let _no_key = EnvGuard::unset("XAI_API_KEY");
+    let levels = serde_json::json!([
+        { "value": "none", "label": "Off" },
+        { "value": "low", "label": "Low" },
+        { "value": "high", "label": "High", "default": true },
+    ]);
+    for (label, owned_by, efforts, expected) in [
+        (
+            "mlx-node engine with levels",
+            "mlx-node",
+            Some(levels.clone()),
+            true,
+        ),
+        ("mlx-node engine without levels", "mlx-node", None, false),
+        (
+            "plain Messages endpoint with levels",
+            "anthropic",
+            Some(levels.clone()),
+            false,
+        ),
+    ] {
+        let model = messages_row(owned_by, efforts);
+        assert_eq!(model.info.api_backend, ApiBackend::Messages, "{label}");
+        assert_eq!(sends_extra_body(&model), expected, "{label}");
+    }
+    assert!(
+        !messages_row("anthropic", Some(levels))
+            .info
+            .reasoning_efforts
+            .is_empty(),
+        "the plain endpoint still offers its menu"
+    );
+}
+#[test]
+#[serial]
+fn a_base_url_override_to_another_server_sends_no_extra_body() {
+    let _no_key = EnvGuard::unset("XAI_API_KEY");
+    let endpoints = EndpointsConfig::default();
+    let base = messages_row(
+        "mlx-node",
+        Some(serde_json::json!([{ "value": "low" }, { "value": "high" }])),
+    );
+    let at = |base_url: Option<&str>| {
+        ConfigModelOverride {
+            base_url: base_url.map(str::to_owned),
+            ..Default::default()
+        }
+        .apply("qwen3.6-27b", Some(base.clone()), &endpoints)
+    };
+    assert!(sends_extra_body(&at(None)));
+    assert!(sends_extra_body(&at(Some(&format!("{LISTING_BASE_URL}/")))));
+    assert!(!sends_extra_body(&at(Some("https://api.anthropic.com/v1"))));
 }
 #[test]
 fn config_override_applies_show_model_fingerprint() {
@@ -3440,7 +3533,8 @@ fn e2e_default_model_with_session_routes_to_proxy() {
     let sampling = resolve_sampling(model, Some("session-token-123"));
     assert_eq!(sampling.api_key.as_deref(), Some("session-token-123"));
     assert_eq!(
-        sampling.base_url, "https://cli-chat-proxy.grok.com/v1",
+        sampling.base_url,
+        EndpointsConfig::default().proxy_url(),
         "session auth should route to cli-chat-proxy, not api.x.ai"
     );
 }
@@ -3455,7 +3549,8 @@ fn e2e_default_model_with_external_api_key_routes_to_api_xai() {
     let sampling = resolve_sampling(model, None);
     assert_eq!(sampling.api_key.as_deref(), Some("xai-external-key"));
     assert_eq!(
-        sampling.base_url, "https://api.x.ai/v1",
+        sampling.base_url,
+        EndpointsConfig::default().xai_api_base_url,
         "external API key should route to api.x.ai via api_base_url"
     );
     unsafe { std::env::remove_var("XAI_API_KEY") };
@@ -3580,7 +3675,7 @@ fn e2e_duplicate_model_field_both_entries_survive() {
     assert_eq!(sampling.base_url, "https://inference.example.com/v1");
     let sampling = resolve_sampling(default, Some("session-key"));
     assert_eq!(sampling.api_key.as_deref(), Some("session-key"));
-    assert_eq!(sampling.base_url, "https://cli-chat-proxy.grok.com/v1",);
+    assert_eq!(sampling.base_url, EndpointsConfig::default().proxy_url());
 }
 #[test]
 fn e2e_enterprise_custom_endpoint_skips_xai_defaults() {

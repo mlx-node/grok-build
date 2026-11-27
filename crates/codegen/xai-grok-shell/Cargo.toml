@@ -323,6 +323,14 @@ name = "test_image_strip_recovery"
 required-features = ["test-support"]
 
 [[test]]
+name = "messages_effort_extra_body"
+required-features = ["test-support"]
+
+[[test]]
+name = "messages_effort_cache_upgrade"
+required-features = ["test-support"]
+
+[[test]]
 name = "test_startup_boot_current_thread"
 required-features = ["test-support"]
 

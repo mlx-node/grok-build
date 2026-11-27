@@ -318,6 +318,8 @@ pub struct SamplingClient {
     bearer_resolver: Option<crate::config::SharedBearerResolver>,
     /// Per-request header injection (OTel traceparent).
     header_injector: Option<crate::config::SharedHeaderInjector>,
+    /// See `SamplerConfig::extra_body_effort_gate`.
+    extra_body_effort_gate: Option<crate::config::SharedExtraBodyEffortGate>,
     /// Endpoint URL builder, resolved once from `base_url` and `query_params`.
     endpoint: EndpointTemplate,
     first_use_noted: Arc<AtomicBool>,
@@ -669,9 +671,18 @@ impl SamplingClient {
             attribution_callback: config.attribution_callback,
             bearer_resolver: config.bearer_resolver,
             header_injector: config.header_injector,
+            extra_body_effort_gate: config.extra_body_effort_gate,
             endpoint,
             first_use_noted: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// Asked per request: the gate sees the model this request names, which a side call may swap after the client is built.
+    fn reads_extra_body_effort(&self, request: &ConversationRequest) -> bool {
+        request.reasoning_effort.is_some()
+            && self.extra_body_effort_gate.as_ref().is_some_and(|gate| {
+                gate.reads_extra_body_effort(request.model.as_deref().unwrap_or(""), &self.base_url)
+            })
     }
 
     pub fn api_backend(&self) -> ApiBackend {
@@ -2096,7 +2107,8 @@ impl SamplingClient {
         let x_grok_transient_retry = request.x_grok_transient_retry.clone();
         let x_grok_agent_id = request.x_grok_agent_id.clone();
 
-        let messages_request = build_messages_request(&request);
+        let messages_request =
+            build_messages_request(&request, self.reads_extra_body_effort(&request));
 
         let mut wrapper = MessagesRequestWrapper::new(messages_request);
         wrapper.x_grok_conv_id = x_grok_conv_id;
@@ -2129,7 +2141,8 @@ impl SamplingClient {
         let x_grok_transient_retry = request.x_grok_transient_retry.clone();
         let x_grok_agent_id = request.x_grok_agent_id.clone();
 
-        let messages_request = build_messages_request(&request);
+        let messages_request =
+            build_messages_request(&request, self.reads_extra_body_effort(&request));
 
         let mut wrapper = MessagesRequestWrapper::new(messages_request);
         wrapper.x_grok_conv_id = x_grok_conv_id;
@@ -2684,6 +2697,172 @@ mod tests {
         assert_eq!(None, header(&headers, CONTENT_ENCODING));
         assert_eq!(Some("application/json"), header(&headers, CONTENT_TYPE));
         assert!(std::str::from_utf8(&body).unwrap().contains(&input));
+    }
+
+    /// Says yes for one model at any base URL, and records every `(model, base_url)` it was asked about.
+    #[derive(Debug)]
+    struct OneModelGate {
+        model: &'static str,
+        asked: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    impl crate::config::ExtraBodyEffortGate for OneModelGate {
+        fn reads_extra_body_effort(&self, model: &str, base_url: &str) -> bool {
+            self.asked
+                .lock()
+                .unwrap()
+                .push((model.to_owned(), base_url.to_owned()));
+            model == self.model
+        }
+    }
+
+    fn gated(model: &'static str) -> (SamplerConfig, Arc<OneModelGate>) {
+        let gate = Arc::new(OneModelGate {
+            model,
+            asked: std::sync::Mutex::new(Vec::new()),
+        });
+        let config = SamplerConfig {
+            extra_body_effort_gate: Some(gate.clone()),
+            ..minimal_config()
+        };
+        (config, gate)
+    }
+
+    /// The `/v1/messages` body one conversation request for `model` (the client's own when `None`) with `effort` puts
+    /// on the wire, and the client's base URL.
+    async fn capture_messages_body(
+        config: SamplerConfig,
+        streaming: bool,
+        model: Option<&str>,
+        effort: Option<xai_grok_sampling_types::ReasoningEffort>,
+    ) -> (serde_json::Value, String) {
+        let (tx, rx) = oneshot::channel();
+        let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
+        let reply = if streaming {
+            ("text/event-stream", "data: [DONE]\n\n")
+        } else {
+            ("application/json", EMPTY_MESSAGE_JSON)
+        };
+        let app = Router::new().route(
+            "/v1/messages",
+            post(move |body: Bytes| {
+                let tx = tx.clone();
+                async move {
+                    let _ = tx.lock().unwrap().take().unwrap().send(body);
+                    axum::response::Response::builder()
+                        .header("content-type", reply.0)
+                        .body(axum::body::Body::from(reply.1))
+                        .unwrap()
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let base_url = format!("http://{addr}/v1");
+        let client = SamplingClient::new(SamplerConfig {
+            base_url: base_url.clone(),
+            api_backend: ApiBackend::Messages,
+            ..config
+        })
+        .unwrap();
+        let request = ConversationRequest {
+            items: vec![xai_grok_sampling_types::ConversationItem::user("hi")],
+            model: model.map(str::to_owned),
+            reasoning_effort: effort,
+            ..Default::default()
+        };
+        if streaming {
+            client.conversation_stream_messages(request).await.map(drop)
+        } else {
+            client.conversation_messages(request).await.map(drop)
+        }
+        .unwrap_or_else(|e| panic!("streaming={streaming}: {e}"));
+        let body = rx.await.unwrap();
+        server.abort();
+        (serde_json::from_slice(&body).unwrap(), base_url)
+    }
+
+    #[tokio::test]
+    async fn plain_messages_endpoint_gets_no_extra_body() {
+        use xai_grok_sampling_types::ReasoningEffort as E;
+        for streaming in [false, true] {
+            for effort in [E::None, E::Low, E::High, E::Max] {
+                let (body, _) =
+                    capture_messages_body(minimal_config(), streaming, None, Some(effort)).await;
+                assert!(
+                    body.get("extra_body").is_none(),
+                    "streaming={streaming} {effort:?}: {body:#}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn mlx_messages_endpoint_gets_the_effort_in_extra_body() {
+        use xai_grok_sampling_types::ReasoningEffort as E;
+        for streaming in [false, true] {
+            for (effort, wire) in [(E::None, "none"), (E::Low, "low"), (E::Max, "max")] {
+                let (config, gate) = gated("test-model");
+                let (body, base_url) =
+                    capture_messages_body(config, streaming, None, Some(effort)).await;
+                assert_eq!(
+                    body.get("extra_body"),
+                    Some(&serde_json::json!({ "reasoning_effort": wire })),
+                    "streaming={streaming} {effort:?}: {body:#}"
+                );
+                assert_eq!(
+                    *gate.asked.lock().unwrap(),
+                    [("test-model".to_owned(), base_url)],
+                    "the gate sees the request's model and the client's base URL"
+                );
+                let (plain, _) =
+                    capture_messages_body(minimal_config(), streaming, None, Some(effort)).await;
+                let mut mlx_body = body.clone();
+                mlx_body.as_object_mut().unwrap().remove("extra_body");
+                assert_eq!(
+                    mlx_body, plain,
+                    "streaming={streaming} {effort:?}: only extra_body differs"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_extra_body_follows_the_model_each_request_names() {
+        use xai_grok_sampling_types::ReasoningEffort as E;
+        for streaming in [false, true] {
+            let (config, gate) = gated("mlx-row");
+            let (swapped, _) =
+                capture_messages_body(config.clone(), streaming, Some("mlx-row"), Some(E::Low))
+                    .await;
+            assert_eq!(
+                swapped.get("extra_body"),
+                Some(&serde_json::json!({ "reasoning_effort": "low" })),
+                "streaming={streaming}: {swapped:#}"
+            );
+            let (own, _) =
+                capture_messages_body(config.clone(), streaming, None, Some(E::Low)).await;
+            assert!(
+                own.get("extra_body").is_none(),
+                "streaming={streaming}: the client's own model is not the gate's: {own:#}"
+            );
+            let (no_effort, _) =
+                capture_messages_body(config, streaming, Some("mlx-row"), None).await;
+            assert!(no_effort.get("extra_body").is_none(), "{no_effort:#}");
+            assert_eq!(
+                gate.asked
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(model, _)| model.as_str())
+                    .collect::<Vec<_>>(),
+                ["mlx-row", "test-model"],
+                "streaming={streaming}: a request without an effort never asks"
+            );
+        }
     }
 
     #[test]

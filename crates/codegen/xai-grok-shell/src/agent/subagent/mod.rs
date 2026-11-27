@@ -482,6 +482,17 @@ impl SubagentSpawnContext {
                 .and_then(|r| r.compaction_tool_choice.as_deref()),
         )
     }
+    pub(crate) fn resolve_compaction_thinking_budget_tokens(&self) -> u32 {
+        crate::util::config::resolve_compaction_thinking_budget_tokens_from(
+            crate::agent::config::env_string(
+                crate::util::config::ENV_COMPACTION_THINKING_BUDGET_TOKENS,
+            )
+            .as_deref(),
+            self.agent_config
+                .as_ref()
+                .and_then(|c| c.features.compaction_thinking_budget_tokens),
+        )
+    }
     pub(crate) fn snapshot_parent_compaction_pins(
         resolved_mode: xai_chat_state::CompactionMode,
         resolved_two_pass: bool,
@@ -837,6 +848,7 @@ async fn read_parent_sampling_config(
                     .models_manager
                     .model_compaction_at_tokens(catalog_model_id.0.as_ref()),
                 doom_loop_recovery: ctx.sampling_config.doom_loop_recovery,
+                extra_body_effort_gate: Some(ctx.models_manager.extra_body_effort_gate()),
                 header_injector: ctx.sampling_config.header_injector.clone(),
             };
             let model_id = ctx.model_id.clone();
@@ -892,6 +904,7 @@ async fn read_parent_sampling_config(
     fallback.compaction_at_tokens = ctx
         .models_manager
         .model_compaction_at_tokens(catalog_model_id.0.as_ref());
+    fallback.extra_body_effort_gate = Some(ctx.models_manager.extra_body_effort_gate());
     (fallback, ctx.model_id.clone())
 }
 /// `AuthType` for a subagent: BYOK gets `ApiKey` (don't overwrite the BYOK key).
@@ -941,6 +954,7 @@ fn resolve_model_override_to_config(
         ctx.sampling_config.deployment_id.clone(),
         ctx.sampling_config.user_id.clone(),
     );
+    config.extra_body_effort_gate = Some(ctx.models_manager.extra_body_effort_gate());
     config.bearer_resolver = if !ctx.would_strip_fallback_key(config.api_key.as_deref())
         && resolved_auth_type == xai_chat_state::AuthType::SessionToken
     {

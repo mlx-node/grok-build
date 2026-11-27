@@ -119,6 +119,11 @@ pub struct SamplerConfig {
     #[serde(default)]
     pub doom_loop_recovery: Option<DoomLoopRecoveryPolicy>,
 
+    /// mlx-node fork: asked once per Messages request that carries an effort, with that request's model and this `base_url`.
+    /// `None` never sends `extra_body`.
+    #[serde(skip)]
+    pub extra_body_effort_gate: Option<SharedExtraBodyEffortGate>,
+
     /// Per-request header injector (e.g. OTel traceparent). Called in `post()`.
     #[serde(skip)]
     pub header_injector: Option<SharedHeaderInjector>,
@@ -163,6 +168,7 @@ impl Default for SamplerConfig {
             compactions_remaining: None,
             compaction_at_tokens: None,
             doom_loop_recovery: None,
+            extra_body_effort_gate: None,
             header_injector: None,
         }
     }
@@ -194,6 +200,14 @@ pub trait HeaderInjector: Send + Sync + std::fmt::Debug {
 }
 
 pub type SharedHeaderInjector = std::sync::Arc<dyn HeaderInjector>;
+
+/// mlx-node fork: whether the endpoint at `base_url` reads the effort of a Messages request for `model` from `extra_body.reasoning_effort`.
+/// A strict Messages endpoint answers 400 to that field, so the answer must come from the endpoint's own model listing.
+pub trait ExtraBodyEffortGate: Send + Sync + std::fmt::Debug {
+    fn reads_extra_body_effort(&self, model: &str, base_url: &str) -> bool;
+}
+
+pub type SharedExtraBodyEffortGate = std::sync::Arc<dyn ExtraBodyEffortGate>;
 
 /// Retry knobs for the sampler's internal transport-error retry loop.
 #[derive(Debug, Clone, Serialize, Deserialize)]

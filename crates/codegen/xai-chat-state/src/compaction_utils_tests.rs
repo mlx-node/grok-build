@@ -3187,6 +3187,28 @@ fn verbatim_reasoning_kept_unless_messages_backend() {
         "tool results must survive even when reasoning is stripped"
     );
 }
+#[test]
+fn has_signed_reasoning_needs_a_non_empty_signature() {
+    use xai_grok_sampling_types::synthesized_reasoning_item;
+    let with_signature = |signature: Option<&str>| {
+        let mut item = synthesized_reasoning_item("thought");
+        item.encrypted_content = signature.map(str::to_owned);
+        vec![
+            ConversationItem::system("sys"),
+            ConversationItem::Reasoning(item),
+            ConversationItem::assistant("done"),
+        ]
+    };
+    assert!(!has_signed_reasoning(&with_signature(None)));
+    assert!(!has_signed_reasoning(&with_signature(Some(""))));
+    assert!(has_signed_reasoning(&with_signature(Some("sig"))));
+    let unsigned = with_signature(None);
+    let kept = prepare_conversation_for_verbatim_summarization(
+        unsigned.clone(),
+        has_signed_reasoning(&unsigned),
+    );
+    assert_eq!(kept.len(), unsigned.len(), "unsigned reasoning is kept");
+}
 /// A trailing incomplete `tool_calls` turn is dropped; an earlier complete run is preserved.
 #[test]
 fn verbatim_truncates_trailing_incomplete_tool_call() {

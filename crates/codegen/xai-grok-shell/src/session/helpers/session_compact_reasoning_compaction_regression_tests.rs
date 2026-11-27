@@ -122,6 +122,7 @@ async fn chat_completions_compaction_extracts_summary_after_reasoning_delta() {
         std::time::Duration::from_secs(30),
         0,
         crate::util::config::CompactionToolChoice::Auto,
+        crate::util::config::DEFAULT_COMPACTION_THINKING_BUDGET_TOKENS,
         &tokio_util::sync::CancellationToken::new(),
     )
     .await
@@ -242,6 +243,7 @@ async fn chat_completions_compaction_does_not_panic_on_reasoning_sibling() {
         std::time::Duration::from_secs(30),
         0,
         crate::util::config::CompactionToolChoice::Auto,
+        crate::util::config::DEFAULT_COMPACTION_THINKING_BUDGET_TOKENS,
         &tokio_util::sync::CancellationToken::new(),
     )
     .await;
@@ -308,6 +310,7 @@ async fn chat_completions_below_trigger_preserves_images_and_tools() {
         std::time::Duration::from_secs(30),
         0,
         crate::util::config::CompactionToolChoice::Auto,
+        crate::util::config::DEFAULT_COMPACTION_THINKING_BUDGET_TOKENS,
         &tokio_util::sync::CancellationToken::new(),
     )
     .await
@@ -326,6 +329,7 @@ async fn chat_completions_below_trigger_preserves_images_and_tools() {
         std::time::Duration::from_secs(30),
         0,
         crate::util::config::CompactionToolChoice::Auto,
+        crate::util::config::DEFAULT_COMPACTION_THINKING_BUDGET_TOKENS,
         &tokio_util::sync::CancellationToken::new(),
     )
     .await
@@ -470,6 +474,7 @@ async fn responses_below_trigger_preserves_images_and_tools() {
         std::time::Duration::from_secs(30),
         0,
         crate::util::config::CompactionToolChoice::Auto,
+        crate::util::config::DEFAULT_COMPACTION_THINKING_BUDGET_TOKENS,
         &tokio_util::sync::CancellationToken::new(),
     )
     .await
@@ -487,6 +492,7 @@ async fn responses_below_trigger_preserves_images_and_tools() {
         std::time::Duration::from_secs(30),
         0,
         crate::util::config::CompactionToolChoice::Auto,
+        crate::util::config::DEFAULT_COMPACTION_THINKING_BUDGET_TOKENS,
         &tokio_util::sync::CancellationToken::new(),
     )
     .await
@@ -577,6 +583,7 @@ async fn stalled_compaction_stream_times_out_as_transient() {
         std::time::Duration::from_millis(150),
         0,
         crate::util::config::CompactionToolChoice::Auto,
+        crate::util::config::DEFAULT_COMPACTION_THINKING_BUDGET_TOKENS,
         &tokio_util::sync::CancellationToken::new(),
     )
     .await;
@@ -663,6 +670,7 @@ async fn completed_then_stalled_stream_errors_no_salvage() {
         std::time::Duration::from_millis(150),
         0,
         crate::util::config::CompactionToolChoice::Auto,
+        crate::util::config::DEFAULT_COMPACTION_THINKING_BUDGET_TOKENS,
         &tokio_util::sync::CancellationToken::new(),
     )
     .await;
@@ -751,6 +759,7 @@ async fn substantial_partial_errors_no_salvage() {
         std::time::Duration::from_millis(150),
         0,
         crate::util::config::CompactionToolChoice::Auto,
+        crate::util::config::DEFAULT_COMPACTION_THINKING_BUDGET_TOKENS,
         &tokio_util::sync::CancellationToken::new(),
     )
     .await;
@@ -836,6 +845,7 @@ async fn thin_partial_retries_on_stall() {
         std::time::Duration::from_millis(150),
         0,
         crate::util::config::CompactionToolChoice::Auto,
+        crate::util::config::DEFAULT_COMPACTION_THINKING_BUDGET_TOKENS,
         &tokio_util::sync::CancellationToken::new(),
     )
     .await;
