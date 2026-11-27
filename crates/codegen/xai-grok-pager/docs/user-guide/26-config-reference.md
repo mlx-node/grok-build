@@ -448,7 +448,7 @@ User-level configuration lives in `$GROK_HOME/config.toml` (default `~/.grok/con
 | `models.image_description` | `string` | `yes` | `user` | Vision model used to transcribe user-supplied images. |
 | `models.inference_idle_timeout_secs` | `number` | `yes` | `user` | Global idle timeout for streaming inference when a model leaves it unset. |
 | `models.max_completion_tokens` | `number` | `yes` | `user` | Global max completion tokens default when a model leaves it unset. |
-| `models.max_retries` | `number` | `yes` | `user` | Global inference retry default when a model leaves it unset. |
+| `models.max_retries` | `number` | `yes` | `user` | Global inference retry default when a model leaves it unset. `GROK_LOOPBACK_CONNECT_MAX_ATTEMPTS=N` (N above 0) caps a refused connect to a loopback host (`127.0.0.0/8`, `::1`, `localhost`) at N attempts; unset, local and remote servers get the same retries. |
 | `models.prompt_suggestion` | `string` | `yes` | `user` | Model pin for next-prompt ghost text. Unset falls through remote, then the session model. |
 | `models.rate_limit_retry_threshold` | `number` | `yes` | `user` | Global total-attempt ceiling for rate-limited requests when a model leaves it unset, capped by the resolved `max_retries`; when configured, it disables the separate subagent 429 wait loop. |
 | `models.session_summary` | `string` | `yes` | `user` | Model used for session titles and summaries. |
