@@ -17,6 +17,20 @@ pub(crate) fn skip_if_host_hook_write_deny_unresolvable() -> bool {
     }
 }
 
+/// Hosts whose container-runtime endpoint is a symlink (OrbStack and Docker Desktop link `/var/run/docker.sock`)
+/// fail closed on every restrict_network profile.
+pub(crate) fn skip_if_host_runtime_socket_unresolvable() -> bool {
+    match crate::runtime_sockets::materialize_runtime_socket_deny_paths_from(
+        crate::runtime_sockets::runtime_socket_deny_paths(),
+    ) {
+        Ok(_) => false,
+        Err(e) => {
+            eprintln!("skipping profile resolve test: host runtime socket unresolvable ({e})");
+            true
+        }
+    }
+}
+
 /// Custom profiles covering every restrict_network inheritance/override shape.
 pub(crate) fn network_inheritance_config() -> SandboxConfig {
     SandboxConfig {

@@ -18,6 +18,13 @@ fn test_profile_capability_set_construction() {
         ProfileName::Off,
     ] {
         let result = profile.to_capability_set(&workspace);
+        // OrbStack and Docker Desktop link `/var/run/docker.sock`; restrict_network profiles fail closed there.
+        if let Err(e) = &result
+            && format!("{e:#}").contains("endpoint is a symlink")
+        {
+            eprintln!("skipping {profile:?}: host runtime socket unresolvable ({e:#})");
+            continue;
+        }
         assert!(
             result.is_ok(),
             "Profile {:?} failed to build CapabilitySet: {:?}",

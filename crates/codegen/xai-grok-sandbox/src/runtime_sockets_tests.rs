@@ -1,6 +1,9 @@
 use super::*;
 use crate::profiles::{ProfileConfig, ProfileName, SandboxConfig, SandboxProfile};
-use crate::test_util::{network_inheritance_config, skip_if_host_hook_write_deny_unresolvable};
+use crate::test_util::{
+    network_inheritance_config, skip_if_host_hook_write_deny_unresolvable,
+    skip_if_host_runtime_socket_unresolvable,
+};
 use serial_test::serial;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -383,7 +386,7 @@ fn runtime_socket_handoff_deduplicates_entries() {
 #[test]
 #[serial(bwrap_env)]
 fn restrict_network_profiles_deny_container_runtime_sockets() {
-    if skip_if_host_hook_write_deny_unresolvable() {
+    if skip_if_host_hook_write_deny_unresolvable() || skip_if_host_runtime_socket_unresolvable() {
         return;
     }
     let workspace = std::env::temp_dir();
@@ -411,7 +414,7 @@ fn restrict_network_profiles_deny_container_runtime_sockets() {
 #[test]
 #[serial(bwrap_env)]
 fn custom_restrict_network_override_controls_auto_socket_denies() {
-    if skip_if_host_hook_write_deny_unresolvable() {
+    if skip_if_host_hook_write_deny_unresolvable() || skip_if_host_runtime_socket_unresolvable() {
         return;
     }
     let workspace = std::env::temp_dir();
