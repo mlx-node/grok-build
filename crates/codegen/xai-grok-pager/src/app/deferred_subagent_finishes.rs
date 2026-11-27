@@ -225,6 +225,7 @@ mod tests {
                 turns: 0,
                 duration_ms: 1,
                 tokens_used: 0,
+                total_tokens_used: 0,
                 output: Some(output.to_owned()),
                 will_wake: false,
             },

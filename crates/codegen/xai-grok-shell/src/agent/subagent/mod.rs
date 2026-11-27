@@ -1163,6 +1163,27 @@ fn stamp_live_fork_session_metadata(
         tracing::warn!(error = %e, "live fork: failed to write forked session summary");
     }
 }
+fn resume_copy_options(
+    source_child_session_id: &str,
+    effective_model_id: &str,
+    parent_prompt_id: Option<String>,
+) -> crate::session::storage::CopySessionOptions {
+    crate::session::storage::CopySessionOptions {
+        parent_session_id: Some(source_child_session_id.to_string()),
+        new_model_id: Some(effective_model_id.to_string()),
+        session_kind: Some("subagent_resume".to_string()),
+        fork_context_source: Some("resumed".to_string()),
+        fork_parent_prompt_id: parent_prompt_id,
+        copy_plan_state: false,
+        copy_plan_mode_state: false,
+        copy_signals: false,
+        copy_usage: true,
+        copy_tool_state: true,
+        copy_events: true,
+        fork_filter: false,
+        ..Default::default()
+    }
+}
 enum BootstrapInitialContext {
     Ready(InitialContext),
     /// Explicit resume_from failed: abort spawn (fail closed).
@@ -1196,20 +1217,11 @@ async fn bootstrap_initial_context(
         let storage = crate::session::storage::jsonl::JsonlStorageAdapter::with_root(
             crate::util::grok_home::grok_home(),
         );
-        let copy_options = crate::session::storage::CopySessionOptions {
-            parent_session_id: Some(source.child_session_id.clone()),
-            new_model_id: Some(effective_model_id.to_string()),
-            session_kind: Some("subagent_resume".to_string()),
-            fork_context_source: Some("resumed".to_string()),
-            fork_parent_prompt_id: request.parent_prompt_id.clone(),
-            copy_plan_state: false,
-            copy_plan_mode_state: false,
-            copy_signals: false,
-            copy_usage: true,
-            copy_tool_state: true,
-            fork_filter: false,
-            ..Default::default()
-        };
+        let copy_options = resume_copy_options(
+            &source.child_session_id,
+            effective_model_id,
+            request.parent_prompt_id.clone(),
+        );
         use crate::session::storage::StorageAdapter as _;
         let is_same_session = source.child_session_id == child_session_info.id.0.as_ref()
             && source.child_cwd == child_session_info.cwd;
@@ -2019,6 +2031,7 @@ fn goal_tick_cmd_tx(
 /// Spawn a background task that periodically emits `SubagentProgress` notifications on the parent session's notification channel. The publisher samples the child's `SessionSignalsHandle` every [`PROGRESS_PUBLISH_INTERVAL`].
 /// It stops automatically when `cancel_token` is cancelled (subagent completion/cancellation).
 /// When `parent_cmd_tx` is `Some`, each tick also goes to the parent `SessionActor` so goal mode can advance its live subagent token accounting. The actor's `SubagentProgress` arm never persists these ticks. Notifications are **not** persisted to JSONL; they are transient UI hints, not authoritative lifecycle events.
+/// Ticks count turns and tool calls from `counts_at_start`, the child's `(tool calls, turns)` when this attempt started.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_progress_publisher(
     signals_handle: crate::session::signals::SessionSignalsHandle,
@@ -2030,6 +2043,7 @@ pub(crate) fn spawn_progress_publisher(
     started_at: std::time::Instant,
     cancel_token: tokio_util::sync::CancellationToken,
     parent_cmd_tx: Option<mpsc::UnboundedSender<SessionCommand>>,
+    counts_at_start: (u32, u32),
 ) -> tokio_util::task::AbortOnDropHandle<()> {
     tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
         let mut interval = tokio::time::interval(PROGRESS_PUBLISH_INTERVAL);
@@ -2066,13 +2080,14 @@ pub(crate) fn spawn_progress_publisher(
                 parent_session_id: parent_session_id.clone(),
                 child_session_id: child_session_id.clone(),
                 duration_ms,
-                turn_count: signals.turn_count,
-                tool_call_count: signals.tool_call_count,
+                turn_count: signals.turn_count.saturating_sub(counts_at_start.1),
+                tool_call_count: signals.tool_call_count.saturating_sub(counts_at_start.0),
                 tokens_used: signals.context_tokens_used,
                 context_window_tokens: signals.context_window_tokens,
                 context_usage_pct: signals.context_window_usage,
                 tools_used: signals.tools_used,
                 error_count: signals.error_count,
+                tool_failure_count: signals.tool_failure_count,
             };
             let notification = SessionNotification {
                 session_id: acp::SessionId::new(parent_session_id.clone()),
@@ -2437,6 +2452,7 @@ fn cancelled_orphan_finish(
         turns: 0,
         duration_ms,
         tokens_used: 0,
+        total_tokens_used: 0,
         output: None,
         will_wake: false,
     }
@@ -2547,6 +2563,7 @@ fn completed_finish_from_inspection(
         turns,
         duration_ms: inspection.snapshot.duration_ms,
         tokens_used: 0,
+        total_tokens_used: 0,
         output: None,
         will_wake: false,
     })
@@ -2655,6 +2672,7 @@ pub(crate) async fn reconcile_orphaned_subagents_with_backend(
                         turns: m.turns.unwrap_or(0),
                         duration_ms: m.duration_ms.unwrap_or(0),
                         tokens_used: 0,
+                        total_tokens_used: 0,
                         output: None,
                         will_wake: false,
                     },

@@ -2037,6 +2037,7 @@ fn notification_subagent_spawned_includes_resumed_from() {
         model: None,
         resumed_from: Some("prev-agent-id".into()),
         workflow_run_id: None,
+        retry_of: None,
         agent_address: None,
     };
     let json = serde_json::to_value(&notification).unwrap();
@@ -2066,6 +2067,7 @@ fn notification_subagent_spawned_includes_resumed_from() {
         model: None,
         resumed_from: None,
         workflow_run_id: None,
+        retry_of: None,
         agent_address: None,
     };
     let json = serde_json::to_value(&fresh).unwrap();
@@ -3290,6 +3292,7 @@ fn goal_tick_cmd_tx_gates_on_goal_enabled() {
 }
 /// Producer side of the goal live-token wiring.
 /// A publisher tick must land on the parent command channel as a `SubagentProgress` notification carrying the child's signal values.
+/// Mutations that turn it red: send `error_count` or 0 as `tool_failure_count`, and stop counting a tool failure in `error_count`.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn progress_publisher_delivers_ticks_to_parent_cmd_channel() {
     use crate::session::signals::SessionSignalsHandle;
@@ -3300,6 +3303,8 @@ async fn progress_publisher_delivers_ticks_to_parent_cmd_channel() {
             let signals = SessionSignalsHandle::new();
             signals.increment_turn();
             signals.record_tool_call("bash");
+            signals.record_tool_failure("read_file");
+            signals.record_error();
             tokio::task::yield_now().await;
             let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
             let cancel = tokio_util::sync::CancellationToken::new();
@@ -3313,6 +3318,7 @@ async fn progress_publisher_delivers_ticks_to_parent_cmd_channel() {
                 std::time::Instant::now(),
                 cancel.clone(),
                 Some(cmd_tx),
+                (0, 0),
             );
             let cmd = tokio::time::timeout(
                     std::time::Duration::from_secs(30),
@@ -3330,6 +3336,8 @@ async fn progress_publisher_delivers_ticks_to_parent_cmd_channel() {
                 parent_session_id,
                 turn_count,
                 tool_call_count,
+                error_count,
+                tool_failure_count,
                 ..
             } = notification.update else {
                 panic!("expected SubagentProgress, got {:?}", notification.update);
@@ -3338,6 +3346,56 @@ async fn progress_publisher_delivers_ticks_to_parent_cmd_channel() {
             assert_eq!(parent_session_id, "parent-1");
             assert_eq!(turn_count, 1);
             assert_eq!(tool_call_count, 1);
+            assert_eq!(error_count, 2);
+            assert_eq!(tool_failure_count, 1);
+        })
+        .await;
+}
+/// A resumed child's signals start from the seed; its ticks count from the attempt's start.
+/// Mutations that turn it red: send the raw counts (turn 4, tool calls 10), and swap the `(tool calls, turns)` order (turn 0, tool calls 7).
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn progress_ticks_count_from_attempt_start() {
+    use crate::session::signals::SessionSignalsHandle;
+    use crate::test_support::lsp_runtime::test_gateway;
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let signals = SessionSignalsHandle::new();
+            signals.seed_counts(3, 0, 9, vec!["bash".to_owned()], Vec::new());
+            signals.increment_turn();
+            signals.record_tool_call("bash");
+            tokio::task::yield_now().await;
+            let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let _publisher = spawn_progress_publisher(
+                signals,
+                test_gateway(),
+                "parent-1".to_string(),
+                "sub-1".to_string(),
+                None,
+                "child-1".to_string(),
+                std::time::Instant::now(),
+                cancel.clone(),
+                Some(cmd_tx),
+                (9, 3),
+            );
+            let cmd = tokio::time::timeout(std::time::Duration::from_secs(30), cmd_rx.recv())
+                .await
+                .expect("a tick must arrive within the publish interval")
+                .expect("channel open");
+            cancel.cancel();
+            let SessionCommand::XaiSessionNotification { notification } = cmd else {
+                panic!("expected XaiSessionNotification");
+            };
+            let SessionUpdate::SubagentProgress {
+                turn_count,
+                tool_call_count,
+                ..
+            } = notification.update
+            else {
+                panic!("expected SubagentProgress, got {:?}", notification.update);
+            };
+            assert_eq!((turn_count, tool_call_count), (1, 1));
         })
         .await;
 }

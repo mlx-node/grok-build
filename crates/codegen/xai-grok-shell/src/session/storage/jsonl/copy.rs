@@ -417,6 +417,11 @@ impl JsonlStorageAdapter {
             &self.session_dir(source_info).join("tool_state.json"),
             &self.session_dir(target_info).join("tool_state.json"),
         )?;
+        copy_sidecar_file(
+            options.copy_events && !options.fork_filter && options.target_prompt_index.is_none(),
+            &self.session_dir(source_info).join("events.jsonl"),
+            &self.session_dir(target_info).join("events.jsonl"),
+        )?;
         let announcement_state_copied = copy_sidecar_file(
             options.copy_announcement_state,
             &self.announcement_state_file(source_info),

@@ -121,6 +121,7 @@ impl SubagentAttemptInfo {
             turns: self.turns.unwrap_or(0),
             duration_ms: self.duration_ms.unwrap_or(0),
             tokens_used: self.tokens_used.unwrap_or(0),
+            total_tokens_used: 0,
             output: None,
             will_wake: false,
         }

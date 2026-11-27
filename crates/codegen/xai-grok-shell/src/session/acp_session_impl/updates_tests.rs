@@ -37,6 +37,7 @@ fn spawned(
         model: Some("test-model".to_owned()),
         resumed_from: resumed_from.map(str::to_owned),
         workflow_run_id: None,
+        retry_of: None,
         agent_address: None,
     }
 }
@@ -57,6 +58,7 @@ fn finished_for(
         turns: 1,
         duration_ms: 1,
         tokens_used,
+        total_tokens_used: 0,
         output: output.map(str::to_owned),
         will_wake: false,
     }
@@ -80,6 +82,7 @@ fn progress(subagent_id: &str, attempt_id: Option<&str>, tokens_used: u64) -> Xa
         context_usage_pct: 1,
         tools_used: vec!["read_file".to_owned()],
         error_count: 0,
+        tool_failure_count: 0,
     }
 }
 
@@ -166,6 +169,7 @@ async fn orphan_finish_without_token_record_persists_once_and_stops_reheal() {
                     identity: None,
                     next_trace_turn: None,
                 },
+                None,
             )
             .await
             .expect("persistence actor");
@@ -264,6 +268,7 @@ async fn duplicate_spawn_after_finish_is_not_persisted_or_rehealed() {
                     identity: None,
                     next_trace_turn: None,
                 },
+                None,
             )
             .await
             .expect("persistence actor");

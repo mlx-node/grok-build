@@ -754,6 +754,7 @@ impl SessionActor {
                 turns,
                 duration_ms,
                 tokens_used,
+                total_tokens_used: _,
                 output,
                 will_wake,
             } => {

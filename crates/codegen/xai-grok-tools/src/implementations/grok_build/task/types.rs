@@ -45,6 +45,8 @@ pub enum SubagentOwner {
     Task,
     Workflow {
         run_id: String,
+        /// The attempt this output-contract retry resumes; `None` on every other spawn.
+        retry_of: Option<String>,
     },
 }
 
@@ -52,13 +54,28 @@ impl SubagentOwner {
     pub fn workflow(run_id: impl Into<String>) -> Self {
         Self::Workflow {
             run_id: run_id.into(),
+            retry_of: None,
+        }
+    }
+
+    pub fn workflow_retry(run_id: impl Into<String>, of: impl Into<String>) -> Self {
+        Self::Workflow {
+            run_id: run_id.into(),
+            retry_of: Some(of.into()),
         }
     }
 
     pub fn workflow_run_id(&self) -> Option<&str> {
         match self {
             Self::Task => None,
-            Self::Workflow { run_id } => Some(run_id),
+            Self::Workflow { run_id, .. } => Some(run_id),
+        }
+    }
+
+    pub fn retry_of(&self) -> Option<&str> {
+        match self {
+            Self::Task => None,
+            Self::Workflow { retry_of, .. } => retry_of.as_deref(),
         }
     }
 

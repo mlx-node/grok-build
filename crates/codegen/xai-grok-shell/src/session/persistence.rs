@@ -2953,6 +2953,7 @@ pub(crate) async fn new(
                 crate::session::summary::SummaryConfig {
                     sampling_client,
                     model: session_summary_model,
+                    llm: true,
                     persistence_tx: summary_tx,
                 },
             ),
@@ -2983,6 +2984,7 @@ pub(crate) enum ExplicitSessionOpen {
 
 /// Used for subagent child sessions (top-level `sessions/<cwd>/<id>` dirs; only their metadata nests under the parent's session dir).
 /// Skips remote and relay sync; lifecycle notifications are handled by the coordinator.
+/// A new child without a title takes `label` as its title; with no label, its first prompt's leading words. Neither calls the model.
 pub(crate) async fn new_with_explicit_dir(
     info: &Info,
     target_dir: PathBuf,
@@ -2990,6 +2992,7 @@ pub(crate) async fn new_with_explicit_dir(
     sampling_client: OaiCompatClient,
     session_summary_model: String,
     open: ExplicitSessionOpen,
+    label: Option<&str>,
 ) -> io::Result<PersistenceHandle> {
     let storage = JsonlStorageAdapter::with_explicit_session_dir(target_dir);
 
@@ -3017,6 +3020,11 @@ pub(crate) async fn new_with_explicit_dir(
             summary.source_workspace_dir = None;
         }
         storage.write_summary_sync(info, &summary)?;
+        if let Some(label) = label.map(str::trim).filter(|label| !label.is_empty()) {
+            storage
+                .set_generated_title_if_absent(info, label.to_owned())
+                .await?;
+        }
     }
 
     if let Some(identity) = identity {
@@ -3062,6 +3070,7 @@ pub(crate) async fn new_with_explicit_dir(
                 crate::session::summary::SummaryConfig {
                     sampling_client,
                     model: session_summary_model,
+                    llm: false,
                     persistence_tx: summary_tx,
                 },
             ),
@@ -3190,6 +3199,7 @@ pub(crate) async fn load_light(
             crate::session::summary::SummaryConfig {
                 sampling_client,
                 model: session_summary_model,
+                llm: true,
                 persistence_tx: summary_tx,
             },
         );
@@ -3360,6 +3370,10 @@ mod delete_session_history_tests;
 #[cfg(test)]
 #[path = "persistence_worktree_stamp_tests.rs"]
 mod worktree_stamp_tests;
+
+#[cfg(test)]
+#[path = "persistence_child_title_tests.rs"]
+mod child_title_tests;
 
 /// List the `limit` most recently modified session summaries across all workspaces.
 /// Uses stat-based mtime sorting to avoid reading every summary file on disk; final order uses `last_active_at` else `updated_at`.

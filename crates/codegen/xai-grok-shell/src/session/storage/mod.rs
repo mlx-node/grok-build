@@ -901,6 +901,8 @@ pub struct CopySessionOptions {
     pub copy_tool_state: bool,
     /// Whether to copy `announcement_state.json`. Defaults to `true`.
     pub copy_announcement_state: bool,
+    /// Whether to copy `events.jsonl`, only on a whole copy (no `target_prompt_index`, no `fork_filter`). Defaults to `false`.
+    pub copy_events: bool,
     /// Whether to copy the `compaction/` segment archive (`segment_*.md` and `INDEX.md`, the verbose pre-compaction transcripts).
     /// Defaults to `false`: these can be large and most copy paths don't need them.
     /// Forks enable it so the child retains the parent's pre-compaction history.
@@ -938,6 +940,7 @@ impl Default for CopySessionOptions {
             copy_usage: true,
             copy_tool_state: true,
             copy_announcement_state: true,
+            copy_events: false,
             copy_compaction_segments: false,
             fork_filter: false,
             inherited_prefix_len: None,

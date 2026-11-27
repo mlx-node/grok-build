@@ -1465,6 +1465,7 @@ pub(super) fn test_subagent_spawned_for_workflow(
         context_normalized: false,
         capability_mode: None,
         workflow_run_id,
+        retry_of: None,
         persona: None,
         role: None,
         model: None,
@@ -1489,6 +1490,7 @@ pub(super) fn test_subagent_finished_for_attempt(
         turns: 1,
         duration_ms: 500,
         tokens_used: 0,
+        total_tokens_used: 0,
         output: None,
         will_wake: false,
     }
@@ -1510,6 +1512,7 @@ pub(super) fn test_subagent_progress(
         context_usage_pct: 0,
         tools_used: vec![],
         error_count: 0,
+        tool_failure_count: 0,
     }
 }
 /// Snapshot of subagent state after SubagentSpawned for method-parity tests.

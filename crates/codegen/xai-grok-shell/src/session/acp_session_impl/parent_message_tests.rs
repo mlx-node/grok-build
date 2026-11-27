@@ -814,6 +814,7 @@ async fn delivered_message_is_durable_in_updates_and_chat_history_before_shutdow
                 identity: None,
                 next_trace_turn: None,
             },
+            None,
         )
         .await
         .expect("persistence actor");

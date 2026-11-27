@@ -38,6 +38,7 @@ fn test_actor_inner(
         crate::session::summary::SummaryGenerator::new(crate::session::summary::SummaryConfig {
             sampling_client,
             model: String::new(),
+            llm: true,
             persistence_tx: tx.downgrade(),
         });
     if mark_summary_done {

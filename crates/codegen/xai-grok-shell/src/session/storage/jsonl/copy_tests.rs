@@ -1478,6 +1478,76 @@ async fn sidecar_flags_gate_their_files_independently() {
     );
 }
 
+/// Mutations that turn it red: drop the events copy, ignore `copy_events`, swap source and target,
+/// and drop either whole-copy guard (prompt cut or fork filter).
+#[tokio::test]
+async fn copy_events_only_on_a_whole_copy() {
+    let tmp = TempDir::new().unwrap();
+    let adapter = JsonlStorageAdapter::with_root(tmp.path().to_path_buf());
+    let source = Info {
+        id: acp::SessionId::new("src-events"),
+        cwd: "/src".to_string(),
+    };
+    adapter
+        .init_session(&source, default_model_id())
+        .await
+        .unwrap();
+    let events: &[u8] = b"{\"ts\":\"2026-11-26T06:20:00.000Z\",\"type\":\"turn_started\",\"session_id\":\"src-events\",\"turn_number\":0}\n\
+{\"ts\":\"2026-11-26T06:20:09.000Z\",\"type\":\"turn_ended\",\"outcome\":\"completed\"}\n";
+    std::fs::write(adapter.session_dir(&source).join("events.jsonl"), events).unwrap();
+
+    let cases = [
+        (
+            "whole",
+            CopySessionOptions {
+                copy_events: true,
+                ..Default::default()
+            },
+            true,
+        ),
+        ("default", CopySessionOptions::default(), false),
+        (
+            "prompt-cut",
+            CopySessionOptions {
+                copy_events: true,
+                target_prompt_index: Some(0),
+                ..Default::default()
+            },
+            false,
+        ),
+        (
+            "fork-filter",
+            CopySessionOptions {
+                copy_events: true,
+                fork_filter: true,
+                ..Default::default()
+            },
+            false,
+        ),
+    ];
+    for (name, options, copied) in cases {
+        let target = Info {
+            id: acp::SessionId::new(format!("tgt-events-{name}")),
+            cwd: "/tgt".to_string(),
+        };
+        adapter
+            .copy_session_data(&source, &target, options)
+            .await
+            .unwrap();
+        let target_events = std::fs::read(adapter.session_dir(&target).join("events.jsonl")).ok();
+        assert_eq!(
+            target_events.as_deref(),
+            copied.then_some(events),
+            "{name}: target events.jsonl"
+        );
+        assert_eq!(
+            std::fs::read(adapter.session_dir(&source).join("events.jsonl")).unwrap(),
+            events,
+            "{name}: source events.jsonl"
+        );
+    }
+}
+
 #[tokio::test]
 async fn fork_restamps_usage_session_id() {
     use crate::session::usage_file::SessionUsageFile;

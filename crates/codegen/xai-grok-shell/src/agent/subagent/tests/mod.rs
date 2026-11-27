@@ -627,6 +627,7 @@ async fn emit_subagent_notification_stamps_one_event_id_on_both_paths() {
             turns: 0,
             duration_ms: 5,
             tokens_used: 0,
+            total_tokens_used: 0,
             output: None,
             will_wake: false,
         },
@@ -1926,6 +1927,16 @@ async fn copy_session_data_preserves_parent_chat_history() {
             !child_data.chat_history.is_empty(),
             "child should have inherited parent chat history"
         );
+}
+/// Mutation that turns it red: drop `copy_events` from the resume options.
+#[test]
+fn resume_copy_options_copy_the_events_log() {
+    let options = resume_copy_options("source-child", "test-model", Some("prompt-1".into()));
+    assert!(options.copy_events);
+    assert!(!options.fork_filter);
+    assert_eq!(options.target_prompt_index, None);
+    assert_eq!(options.session_kind.as_deref(), Some("subagent_resume"));
+    assert_eq!(options.parent_session_id.as_deref(), Some("source-child"));
 }
 fn make_validation_ctx(toggle: HashMap<String, bool>) -> SubagentValidationContext {
     SubagentValidationContext {

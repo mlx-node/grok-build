@@ -1086,6 +1086,7 @@ pub(crate) async fn run_shell_child(
         model: Some(effective_model_id.0.to_string()),
         resumed_from: request.resume_from.clone(),
         workflow_run_id: request.owner.workflow_run_id().map(str::to_string),
+        retry_of: request.owner.retry_of().map(str::to_string),
         agent_address: advertised_address.clone(),
     };
     let publication_boundary = if is_wake {
@@ -1204,6 +1205,7 @@ pub(crate) async fn run_shell_child(
                 next_trace_turn: Some(turn_number.saturating_add(1)),
             }
         },
+        Some(request.description.as_str()),
     )
     .await
     {
@@ -1711,6 +1713,10 @@ pub(crate) async fn run_shell_child(
         &child_handle.hunk_tracker_handle,
         &child_toolset,
     );
+    // Before the first prompt: a resume or wake seeds the signals from the inherited history, and this attempt reports only what it adds.
+    let counts_at_start = signals_snapshot_counts(&child_handle)
+        .await
+        .unwrap_or((0, 0));
     let ready_to_first_turn_span = phase_region(SubagentSpawnPhase::ReadyToFirstTurn);
     let (receipt_sink, receipt_stream) = mpsc::channel(ACTIVE_MESSAGE_RECEIPT_CAPACITY);
     let receipt_drain = PromptTurnReceiptDrain::start(
@@ -1951,6 +1957,7 @@ pub(crate) async fn run_shell_child(
         start,
         cancel_token.clone(),
         goal_tick_cmd_tx(ctx.goal_enabled, ctx.parent_cmd_tx.as_ref()),
+        counts_at_start,
     );
     spawn_timer.record(
         SubagentSpawnPhase::ReadyToFirstTurn,
@@ -2054,11 +2061,11 @@ pub(crate) async fn run_shell_child(
         .as_ref()
         .map(xai_chat_state::UsageTotals::total_tokens)
         .unwrap_or(0);
-    let (tool_calls, turns) = signals_snapshot_counts(&child_handle)
+    let (raw_tool_calls, raw_turns) = signals_snapshot_counts(&child_handle)
         .await
         .unwrap_or((0, 0));
-    result.tool_calls = tool_calls;
-    result.turns = turns;
+    result.tool_calls = raw_tool_calls.saturating_sub(counts_at_start.0);
+    result.turns = raw_turns.saturating_sub(counts_at_start.1);
     result.duration_ms = start.elapsed().as_millis() as u64;
     if let Some(trace_gcs_config) = gcs_upload_ctx.upload_method.as_ref().map(|method| {
         crate::session::repo_changes::TraceExportConfig {
@@ -2236,7 +2243,8 @@ pub(crate) async fn run_shell_child(
     let final_status = result.status().to_string();
     let snapshot_dispose_enabled =
         terminal_persistence_allowed && ctx.resolve_subagent_worktree_snapshot_enabled();
-    let telemetry_tokens = if result.tool_calls > 0 || result.success {
+    // Lifetime count: a failed resumed attempt with no tool calls of its own still reports its context size.
+    let telemetry_tokens = if raw_tool_calls > 0 || result.success {
         child_actor_query(
             "total_tokens",
             child_handle.chat_state_handle.get_total_tokens(),

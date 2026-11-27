@@ -785,6 +785,9 @@ pub enum SessionUpdate {
         resumed_from: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workflow_run_id: Option<String>,
+        /// On a workflow agent's output-contract retry: the attempt it retries (the child it resumes).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_of: Option<String>,
         /// Live-only opaque child address. Wire key is `agentAddress`; omitted from `updates.jsonl`.
         #[serde(
             default,
@@ -821,6 +824,8 @@ pub enum SessionUpdate {
         tools_used: Vec<String>,
         /// Number of errors encountered so far.
         error_count: u32,
+        /// Failed tool calls so far; each is also in error_count.
+        tool_failure_count: u32,
     },
     /// A subagent session has finished (success, failure, or cancellation).
     ///
@@ -843,9 +848,12 @@ pub enum SessionUpdate {
         turns: u32,
         /// Total wall-clock duration in milliseconds.
         duration_ms: u64,
-        /// Total tokens consumed by the subagent's context window.
+        /// Context size at the end of this attempt.
         #[serde(default)]
         tokens_used: u64,
+        /// Input plus output tokens of this attempt's model calls; the roster sums it over attempts.
+        #[serde(default)]
+        total_tokens_used: u64,
         /// Final output text from the subagent (if completed).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<String>,
@@ -1700,6 +1708,7 @@ mod tests {
             context_usage_pct: 35,
             tools_used: vec!["bash".into(), "grep".into()],
             error_count: 1,
+            tool_failure_count: 1,
         };
         let json = serde_json::to_value(&update).unwrap();
         assert_eq!(
@@ -1730,6 +1739,7 @@ mod tests {
             Some(&serde_json::json!(["bash", "grep"]))
         );
         assert_eq!(json.get("error_count"), Some(&serde_json::json!(1)));
+        assert_eq!(json.get("tool_failure_count"), Some(&serde_json::json!(1)));
     }
 
     #[test]
@@ -1747,6 +1757,7 @@ mod tests {
             context_usage_pct: 1,
             tools_used: vec![],
             error_count: 0,
+            tool_failure_count: 0,
         };
         let json_str = serde_json::to_string(&update).unwrap();
         let parsed: SessionUpdate = serde_json::from_str(&json_str).unwrap();
@@ -1773,6 +1784,7 @@ mod tests {
             model: None,
             resumed_from: None,
             workflow_run_id: None,
+            retry_of: None,
             agent_address: None,
         })
         .unwrap();
@@ -1789,6 +1801,7 @@ mod tests {
             context_usage_pct: 0,
             tools_used: vec![],
             error_count: 0,
+            tool_failure_count: 0,
         })
         .unwrap();
         let finished = serde_json::to_value(SessionUpdate::SubagentFinished {
@@ -1801,6 +1814,7 @@ mod tests {
             turns: 1,
             duration_ms: 200,
             tokens_used: 50_000,
+            total_tokens_used: 0,
             output: None,
             will_wake: false,
         })
@@ -1838,6 +1852,7 @@ mod tests {
             model: None,
             resumed_from: None,
             workflow_run_id: None,
+            retry_of: None,
             agent_address: Some("opaque-address".into()),
         };
         let json = serde_json::to_value(&update).unwrap();
@@ -1886,6 +1901,35 @@ mod tests {
     }
 
     #[test]
+    fn subagent_spawned_retry_of_is_omitted_when_none() {
+        let spawned = |retry_of: Option<&str>| SessionUpdate::SubagentSpawned {
+            attempt_id: None,
+            subagent_id: "s".into(),
+            parent_session_id: "p".into(),
+            parent_prompt_id: None,
+            child_session_id: "c".into(),
+            subagent_type: "general-purpose".into(),
+            description: "d".into(),
+            effective_context_source: Some("resumed".into()),
+            context_normalized: false,
+            capability_mode: None,
+            persona: None,
+            role: None,
+            model: None,
+            resumed_from: Some("a1".into()),
+            workflow_run_id: Some("wf".into()),
+            retry_of: retry_of.map(str::to_owned),
+            agent_address: None,
+        };
+        let retry = serde_json::to_value(spawned(Some("a1"))).unwrap();
+        assert_eq!(retry.get("retry_of"), Some(&serde_json::json!("a1")));
+        let plain = serde_json::to_value(spawned(None)).unwrap();
+        assert!(plain.get("retry_of").is_none(), "{plain}");
+        let parsed: SessionUpdate = serde_json::from_value(plain).unwrap();
+        assert_eq!(parsed, spawned(None));
+    }
+
+    #[test]
     fn subagent_finished_without_tokens_used_backward_compat() {
         // Old JSONL entries written before the tokens_used field was added must deserialize with tokens_used defaulting to 0
         // modelUsage on older wire is ignored (billing is RecordSubagentUsage only).
@@ -1904,11 +1948,13 @@ mod tests {
             SessionUpdate::SubagentFinished {
                 subagent_id,
                 tokens_used,
+                total_tokens_used,
                 output,
                 ..
             } => {
                 assert_eq!(subagent_id, "sa-old");
                 assert_eq!(tokens_used, 0, "missing field must default to 0");
+                assert_eq!(total_tokens_used, 0, "missing field must default to 0");
                 assert_eq!(output, None);
             }
             other => panic!("expected SubagentFinished, got {other:?}"),
@@ -1927,6 +1973,7 @@ mod tests {
             turns: 2,
             duration_ms: 10_000,
             tokens_used: 75_000,
+            total_tokens_used: 120_000,
             output: Some("done".into()),
             will_wake: false,
         };
@@ -1936,6 +1983,10 @@ mod tests {
 
         let json = serde_json::to_value(&update).unwrap();
         assert_eq!(json.get("tokens_used"), Some(&serde_json::json!(75_000)));
+        assert_eq!(
+            json.get("total_tokens_used"),
+            Some(&serde_json::json!(120_000))
+        );
     }
 
     #[test]
