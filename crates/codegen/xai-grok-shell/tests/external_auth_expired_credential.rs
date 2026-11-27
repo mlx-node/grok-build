@@ -229,6 +229,8 @@ fn provider_runs(grok_home: &Path) -> usize {
 fn advertised(init: &acp::InitializeResponse) -> Vec<(String, bool)> {
     init.auth_methods
         .iter()
+        // This fork advertises `xai.api_key` for every loopback endpoint, and the mock is one.
+        .filter(|m| &*m.id().0 != "xai.api_key")
         .map(|m| {
             let external = m
                 .meta()

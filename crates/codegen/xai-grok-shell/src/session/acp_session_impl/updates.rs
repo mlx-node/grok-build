@@ -999,7 +999,12 @@ impl SessionActor {
         let usage = response
             .usage
             .as_ref()
-            .map(crate::extensions::notification::ResponseUsage::from);
+            .map(crate::extensions::notification::ResponseUsage::from)
+            // mlx-node fork: perf lives on the response, not TokenUsage, so the From impl cannot fill it.
+            .map(|mut u| {
+                u.perf = response.perf;
+                u
+            });
         let signature = response
             .reasoning_items()
             .filter_map(|r| r.encrypted_content.clone())

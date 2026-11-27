@@ -94,6 +94,7 @@ fn acp_turn_usage_emits_usage_line_without_a_message_id() {
             cache_read_input_tokens: 400,
             cache_creation_input_tokens: 25,
             reasoning_tokens: 10,
+            perf: None,
         },
     });
     let Some(usage) = out.first() else {

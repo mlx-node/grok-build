@@ -411,6 +411,8 @@ impl SessionActor {
                 error_kind,
                 usage,
                 elapsed_ms,
+                // mlx-node fork: the turn-end snapshot carries the last response's perf counters.
+                snapshot.and_then(|s| s.last_response_perf),
             ),
             extra_meta,
             crate::session::storage::jsonl::AppendDurability::Durable,

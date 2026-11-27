@@ -495,11 +495,11 @@ impl WelcomeLayout {
 
 /// Controls what the version badge renders.
 pub(super) enum VersionBadgeMode<'a> {
-    /// Full badge: team | tier | api_key | **Grok Build** VERSION+channel (right-aligned).
+    /// Full badge: team | tier | api_key | **MLX Agent** VERSION+channel (right-aligned).
     Full { subscription_tier: Option<&'a str> },
     /// Hero footer: team | api_key | channel (right-aligned, gray).
     HeroFooter,
-    /// Hero inline: **Grok Build**  VERSION (left-aligned).
+    /// Hero inline: **MLX Agent**  VERSION (left-aligned).
     HeroInline,
 }
 
@@ -545,18 +545,17 @@ pub(super) fn render_version_badge(
         spans.push(sep.clone());
     }
     if show_api_key && is_api_key_auth {
-        spans.push(Span::styled(
-            "Logged in with API key",
-            Style::default().fg(theme.gray),
-        ));
+        // mlx-node fork: the auth is always the local server stub, so say so.
+        spans.push(Span::styled("Local", Style::default().fg(theme.gray)));
         spans.push(sep);
     }
 
     let channel = xai_grok_update::channel_label();
     match &mode {
         VersionBadgeMode::Full { .. } => {
+            // mlx-node fork: product name + upstream credit (dim, zero extra rows).
             spans.push(Span::styled(
-                "Grok Build  ",
+                "MLX Agent  ",
                 Style::default()
                     .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
@@ -564,6 +563,10 @@ pub(super) fn render_version_badge(
             spans.push(Span::styled(
                 format!("{}{}", xai_grok_version::VERSION, channel),
                 Style::default().fg(theme.gray),
+            ));
+            spans.push(Span::styled(
+                "   ·   forked from Grok Build",
+                Style::default().fg(theme.gray_dim),
             ));
         }
         VersionBadgeMode::HeroFooter => {
@@ -575,8 +578,10 @@ pub(super) fn render_version_badge(
             }
         }
         VersionBadgeMode::HeroInline => {
+            // mlx-node fork: product name + upstream credit on one line —
+            // costs no extra row, survives the tight-layout info slot.
             spans.push(Span::styled(
-                "Grok Build  ",
+                "MLX Agent  ",
                 Style::default()
                     .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
@@ -584,6 +589,10 @@ pub(super) fn render_version_badge(
             spans.push(Span::styled(
                 xai_grok_version::VERSION,
                 Style::default().fg(theme.gray),
+            ));
+            spans.push(Span::styled(
+                "   ·   forked from Grok Build",
+                Style::default().fg(theme.gray_dim),
             ));
         }
     }
@@ -847,7 +856,7 @@ pub fn render_welcome(
                 content_area,
                 buf,
                 Some((
-                    "Grok Build is not yet available for this account.",
+                    "MLX Agent is not yet available for this account.",
                     theme.gray_bright,
                 )),
                 &menu,
@@ -1027,7 +1036,7 @@ fn render_welcome_trust(
         Line::default(),
         // Two lines so the warning never clips at narrow / compact widths (a single ~78-char line would truncate "...posing security risks")
         Line::from(Span::styled(
-            "Grok Build may run or modify contents in this directory,",
+            "MLX Agent may run or modify contents in this directory,",
             Style::default().fg(theme.gray),
         ))
         .alignment(Alignment::Center),
@@ -2744,8 +2753,8 @@ mod tests {
                 "badge must not label the product: {rendered:?}"
             );
         }
-        assert!(full.contains("Grok Build"), "full badge: {full:?}");
-        assert!(inline.contains("Grok Build"), "inline badge: {inline:?}");
+        assert!(full.contains("MLX Agent"), "full badge: {full:?}");
+        assert!(inline.contains("MLX Agent"), "inline badge: {inline:?}");
         assert!(footer.contains("acme"), "footer keeps the team: {footer:?}");
         assert!(
             !footer.ends_with('\u{2502}'),
@@ -3519,8 +3528,8 @@ mod tests {
         // Logo and menu slots are zero in hero box mode (content is inside the box).
         assert_eq!(layout.logo.width, 0);
         assert_eq!(layout.menu.width, 0);
-        // Sub-rects inside the hero box are valid.
-        assert!(layout.hero_logo.height > 0);
+        // Sub-rects inside the hero box are valid; the logo slot collapses because the MLX fork hides the mark.
+        assert_eq!(layout.hero_logo.height, 0);
         assert!(layout.hero_menu.height > 0);
         assert_eq!(layout.hero_version.height, 1);
     }
@@ -3606,14 +3615,14 @@ mod tests {
         assert_eq!(max, 13);
         let tall = WelcomeLayout::compute(input(Some(max)));
         assert!(!tall.has_hero_box());
-        // Compact logo 5 + gap 1 + menu 4 + flex 1 + prompt 13 + version 2 = 26 fits exactly
-        assert_eq!(tall.logo_tier, LogoTier::Compact);
+        // No logo rows (hidden) + menu 4 + flex + prompt 13 + version 2 fits under 26
+        assert_eq!(tall.logo_tier, LogoTier::Hidden);
         assert_places_every_row(&tall, &input(Some(max)));
     }
 
-    /// iTerm2's default 80x25 (content 22): the compact logo stays while the column fits and steps down only when it does not.
+    /// The MLX fork always hides the logo: no draft height ever reserves logo rows.
     #[test]
-    fn stacked_logo_keeps_its_tier_until_the_column_overflows() {
+    fn stacked_logo_is_hidden_at_every_draft_height() {
         let area = Rect::new(0, 0, 80, 22);
         let input = |prompt_height| WelcomeLayoutInput {
             content_area: area,
@@ -3621,53 +3630,12 @@ mod tests {
             prompt_height,
             ..Default::default()
         };
-        let one_line = WelcomeLayout::compute(input(None));
-        assert_eq!(one_line.logo_tier, LogoTier::Compact);
-        // Compact logo 5 + gap 1 + menu 4 + flex 1 + prompt + version 2 = 13 + prompt: fits up to a 9-row draft
-        // The one-line layout has a 5-row flex gap, so the first 4 extra rows move nothing; the next two shift the column up
-        for extra in 1..=6u16 {
-            let layout = WelcomeLayout::compute(input(Some(PROMPT_HEIGHT + extra)));
-            assert_eq!(layout.logo_tier, LogoTier::Compact, "{extra} extra rows");
-            if extra <= 4 {
-                assert_eq!(
-                    layout.logo, one_line.logo,
-                    "{extra} extra rows: the logo holds still"
-                );
-                assert_eq!(
-                    layout.menu.y, one_line.menu.y,
-                    "{extra} extra rows: the menu holds still"
-                );
-            } else {
-                assert_eq!(
-                    layout.logo.y,
-                    one_line.logo.y - (extra - 4),
-                    "{extra} extra rows"
-                );
-            }
-            assert_places_every_row(&layout, &input(Some(PROMPT_HEIGHT + extra)));
-        }
         let max = prompt_max_height(&input(None));
-        assert_eq!(max, 11);
-        let tall = WelcomeLayout::compute(input(Some(max)));
-        assert_eq!(tall.logo_tier, LogoTier::Hidden);
-        assert_places_every_row(&tall, &input(Some(max)));
-    }
-
-    /// 80x33: the full logo fits beside every draft up to the cap, so it never steps down.
-    #[test]
-    fn stacked_full_logo_survives_the_whole_draft_range_when_it_fits() {
-        let area = Rect::new(0, 0, 80, 33);
-        let input = |prompt_height| WelcomeLayoutInput {
-            content_area: area,
-            menu_height: 4,
-            prompt_height: Some(prompt_height),
-            ..Default::default()
-        };
-        let max = prompt_max_height(&input(PROMPT_HEIGHT));
         for prompt_height in PROMPT_HEIGHT..=max {
-            let layout = WelcomeLayout::compute(input(prompt_height));
-            assert_eq!(layout.logo_tier, LogoTier::Full, "prompt {prompt_height}");
-            assert_places_every_row(&layout, &input(prompt_height));
+            let layout = WelcomeLayout::compute(input(Some(prompt_height)));
+            assert_eq!(layout.logo_tier, LogoTier::Hidden, "prompt {prompt_height}");
+            assert_eq!(layout.logo.height, 0, "prompt {prompt_height}");
+            assert_places_every_row(&layout, &input(Some(prompt_height)));
         }
     }
 
@@ -3710,10 +3678,9 @@ mod tests {
         }
     }
 
-    /// A draft that no longer fits beside the full logo steps the reserved rows AND the painted art down together.
+    /// The reserved logo rows and the painted art stay in lock-step; in the MLX fork both are zero.
     #[test]
     fn stacked_logo_art_matches_the_rows_reserved_for_a_tall_draft() {
-        // Full logo 7 + gap 1 + menu 4 + flex 1 + prompt + version 2 = 15 + prompt: 26 rows fit an 11-row draft under the full logo; 13 rows need the compact one
         let area = Rect::new(0, 0, 60, 26);
         let input = |prompt_height| WelcomeLayoutInput {
             content_area: area,
@@ -3722,12 +3689,11 @@ mod tests {
             ..Default::default()
         };
         let one_line = WelcomeLayout::compute(input(None));
-        assert_eq!(one_line.logo_tier, LogoTier::Full);
-        assert_eq!(one_line.logo.height, logo::full_logo_line_count());
+        assert_eq!(one_line.logo_tier, LogoTier::Hidden);
+        assert_eq!(one_line.logo.height, one_line.logo_tier.rows());
 
         let tall = WelcomeLayout::compute(input(Some(13)));
-        assert_eq!(tall.logo_tier, LogoTier::Compact);
-        assert_eq!(tall.logo.height, logo::compact_logo_line_count());
+        assert_eq!(tall.logo_tier, LogoTier::Hidden);
         assert_eq!(tall.logo.height, tall.logo_tier.rows());
         assert_places_every_row(&tall, &input(Some(13)));
     }
@@ -3752,8 +3718,8 @@ mod tests {
     /// The consent screen passes 0 prompt rows and must sit exactly where it did before the composer could grow.
     #[test]
     fn zero_row_prompt_is_not_charged_for_a_one_line_box_when_centering() {
-        // 80x28, a 9-row body, a 2-row menu: full logo 7 + gap 1 + gap 1 + body 9 leaves 10 rows
-        // (10 - 4 - 2) / 3 = 1 with the zero-row box; a phantom 3-row box would give (10 - 4 - 5) / 3 = 0
+        // 80x28, a 9-row body, a 2-row menu: hidden logo 0 + gap 1 + gap 1 + body 9 leaves room
+        // and the zero-row prompt must not be charged phantom rows when centering
         let area = Rect::new(0, 0, 80, 28);
         let layout = WelcomeLayout::compute_stacked(WelcomeLayoutInput {
             content_area: area,
@@ -3762,8 +3728,7 @@ mod tests {
             prompt_height: Some(0),
             ..Default::default()
         });
-        assert_eq!(layout.logo_tier, LogoTier::Full);
-        assert_eq!(layout.logo.y, 1);
+        assert_eq!(layout.logo_tier, LogoTier::Hidden);
         assert_eq!(layout.prompt.height, 0);
     }
 
@@ -3928,10 +3893,11 @@ mod tests {
 
     #[test]
     fn hero_box_inactive_when_warning_would_overflow() {
-        // Regression: the box is forced to the full 7-row logo, so even a 3-item menu needs 11 box rows
-        // A startup warning (error_height = 2) pushes the total past height 19
-        // The gate must therefore fall back to the stacked layout instead of overflowing by a row
-        let area = Rect::new(0, 0, 90, 19);
+        // Regression: the hidden logo leaves a 10-row box (right column wins), so even a 3-item menu
+        // needs error 2 + gap 1 + box 10 + flex 1 + fixed_below 5 = 19 rows.
+        // A startup warning on an 18-row terminal pushes past that and the gate must fall back
+        // to the stacked layout instead of overflowing by a row
+        let area = Rect::new(0, 0, 90, 18);
         let with_warning = WelcomeLayout::compute(WelcomeLayoutInput {
             content_area: area,
             error_height: 2,
@@ -3969,10 +3935,8 @@ mod tests {
             ..Default::default()
         });
         assert!(!blocked.has_hero_box());
-        assert!(
-            blocked.logo.height > 0,
-            "logo must be painted on the login screen"
-        );
+        // The MLX fork hides the mark, so no logo rows are reserved on the login screen.
+        assert_eq!(blocked.logo.height, 0);
         assert!(
             blocked.menu.height > 0,
             "menu must be painted on the login screen"
@@ -4010,9 +3974,9 @@ mod tests {
 
     #[test]
     fn hero_box_height_accounts_for_borders_and_padding() {
-        // At h >= 26, logo07 is used (7 lines). With menu_height=3:
-        // right_col = 2 + 0 + 0 + 1 + 3 = 6, inner = max(7, 6) = 7.
-        // hero_box_height = 2 (borders) + 2 (v_pad) + 7 = 11.
+        // The logo is hidden, so the right column alone sizes the inner height. With menu_height=3:
+        // right_col = version 1 + subtitle 1 + gap 1 + menu 3 = 6, inner = max(0, 6) = 6.
+        // hero_box_height = 2 (borders) + 2 (v_pad) + 6 = 10.
         let area = Rect::new(0, 0, 100, 50);
         let layout = WelcomeLayout::compute(WelcomeLayoutInput {
             content_area: area,
@@ -4020,7 +3984,7 @@ mod tests {
             ..Default::default()
         });
         assert!(layout.has_hero_box());
-        assert_eq!(layout.hero_box.height, 11);
+        assert_eq!(layout.hero_box.height, 10);
     }
 
     #[test]
@@ -4460,7 +4424,8 @@ the usual channels. "
         assert!(saw_stacked, "the cap must push the box out at 100x32");
     }
 
-    /// The stacked announcement outranks the logo and the draft: the cap reserves its rows, and the logo steps down before it would yield.
+    /// The stacked announcement outranks the draft: the cap reserves its rows at every draft height.
+    /// (Upstream this test also proved the logo yields before the announcement; the MLX fork has no logo, so only the announcement half applies.)
     #[test]
     fn stacked_announcement_stays_visible_for_every_draft_height() {
         let area = Rect::new(0, 0, 70, 30);
@@ -4476,22 +4441,17 @@ the usual channels. "
         assert!(!one_line.has_hero_box());
         let slot = one_line.changelog.height;
         assert!(slot > 0);
-        assert_eq!(one_line.logo_tier, LogoTier::Full);
+        assert_eq!(one_line.logo_tier, LogoTier::Hidden);
         let max = prompt_max_height(&input(None));
-        let mut saw_logo_yield = false;
         for prompt_height in PROMPT_HEIGHT..=max {
             let layout = WelcomeLayout::compute(input(Some(prompt_height)));
             assert_eq!(
                 layout.changelog.height, slot,
                 "prompt {prompt_height}: the announcement must keep its rows"
             );
-            saw_logo_yield |= layout.logo_tier != LogoTier::Full;
+            assert_eq!(layout.logo_tier, LogoTier::Hidden);
             assert_places_every_row(&layout, &input(Some(prompt_height)));
         }
-        assert!(
-            saw_logo_yield,
-            "the cap must be high enough to push the logo out at 70x30"
-        );
     }
 
     /// Production hides the logo on a short terminal and keeps the announcement; a one-line draft must still do that.

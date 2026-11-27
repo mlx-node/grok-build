@@ -196,6 +196,8 @@ pub(super) struct WakeTerminal<'a> {
     pub agent_result: Option<&'a str>,
     pub cancel_trigger: Option<&'a str>,
     pub cancellation_category: Option<&'a str>,
+    /// mlx-node fork: the turn's perf counters from `TurnCompleted.perf` (`None` on old shells / other backends).
+    pub perf: Option<xai_grok_shell::extensions::notification::TurnPerf>,
 }
 
 /// Errored wakes close like a success (no scrollback row); the trace log is their only record.
@@ -222,6 +224,7 @@ pub(super) fn finish_wake_turn(
         agent_result,
         cancel_trigger,
         cancellation_category,
+        perf,
     } = terminal;
 
     let had_output = agent.session.tracker.output_since_last_finish();
@@ -276,6 +279,7 @@ pub(super) fn finish_wake_turn(
                 // The error arm above closed silently, so this Error arm is unreachable
                 error_kind: None,
                 error_banner_present: false,
+                perf,
             },
         ),
     };

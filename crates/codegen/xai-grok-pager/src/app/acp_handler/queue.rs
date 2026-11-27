@@ -467,6 +467,9 @@ pub(super) fn handle_prompt_complete(notif: &acp::ExtNotification, app: &mut App
         cancellation_category: payload.cancellation_category(),
         cancellation_context: payload.cancellation_context(),
         error_kind: payload.error_kind(),
+        // The fire-and-forget `prompt_complete` rail carries no perf; the durable
+        // `TurnCompleted` terminal owns it (arrives on the session/update rail).
+        perf: None,
     };
     if let SessionMatch::Child(_) = matched {
         let Some(agent) = app.agents.get_mut(&id) else {

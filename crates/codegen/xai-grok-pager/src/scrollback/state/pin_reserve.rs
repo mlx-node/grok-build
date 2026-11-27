@@ -425,6 +425,7 @@ mod tests {
         state.push_block(RenderBlock::session_event(
             crate::scrollback::blocks::SessionEvent::TurnCompleted {
                 elapsed: Some(std::time::Duration::from_secs(1)),
+                perf: None,
             },
         ));
         state.prepare_layout(80, 8);
@@ -473,6 +474,7 @@ mod tests {
         state.push_block(RenderBlock::session_event(
             crate::scrollback::blocks::SessionEvent::TurnCompleted {
                 elapsed: Some(std::time::Duration::from_secs(2)),
+                perf: None,
             },
         ));
         state.prepare_layout(80, 8);

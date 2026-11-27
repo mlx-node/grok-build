@@ -1475,9 +1475,12 @@ pub(super) fn handle_prompt_response(
         };
         // The turn-end RPC for this prompt arrived: clear the lost-response reconcile that `handle_prompt_complete` set for it
         // The broadcast is emitted before the RPC response, so in the healthy path the marker lives only a few ms
+        // mlx-node fork: keep the perf the durable `TurnCompleted` stamped on the armed reconcile so the marker can render it
+        let mut turn_perf = None;
         if let Some(pending) = agent.pending_turn_end_reconcile.as_ref()
             && response_pid.as_deref() == Some(pending.prompt_id.as_str())
         {
+            turn_perf = pending.perf;
             agent.pending_turn_end_reconcile = None;
         }
         if let Some(response_pid) = response_pid.as_deref()
@@ -1713,6 +1716,7 @@ pub(super) fn handle_prompt_response(
                         // Ok-path marker: the Error arm is unreachable here.
                         error_kind: None,
                         error_banner_present: false,
+                        perf: turn_perf,
                     },
                 )
             }

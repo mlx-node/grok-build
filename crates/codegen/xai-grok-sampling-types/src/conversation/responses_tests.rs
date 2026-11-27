@@ -1187,6 +1187,7 @@ fn empty_reason_reasoning_only() {
         message_id: None,
         raw_stop_reason: None,
         stop_sequence: None,
+        perf: None,
     };
     assert_eq!(
         response.empty_reason(),

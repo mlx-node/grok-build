@@ -64,7 +64,8 @@ mod tests {
             (dev, Some(prod), plain),
             (prod, Some(pinned), plain),
             ("http://localhost:11434/v1", Some(prod), plain),
-            ("http://127.0.0.1:8080/v1", Some(prod), plain),
+            // This fork's prod proxy is http://127.0.0.1:8080/v1.
+            ("http://127.0.0.1:1234/v1", Some(prod), plain),
             ("https://api.openai.com/v1", Some(prod), plain),
             ("https://api.x.ai/v1", Some(prod), plain),
         ] {

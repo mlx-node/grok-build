@@ -43,7 +43,10 @@ pub fn home_dir() -> Option<PathBuf> {
 fn grok_home_in(home: &Path) -> PathBuf {
     dunce::canonicalize(home)
         .unwrap_or_else(|_| home.to_path_buf())
-        .join(".grok")
+        // mlx-node fork: the forked agent keeps its state next to the
+        // mlx-node data dir instead of sharing the official `grok` CLI's
+        // `~/.grok` (different config/auth/session semantics).
+        .join(".mlx-agent")
 }
 
 /// `$GROK_HOME` verbatim when non-empty, else `<home>/.grok`.

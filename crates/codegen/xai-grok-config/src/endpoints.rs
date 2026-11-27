@@ -267,7 +267,9 @@ fn parse_otlp_header_list(raw: &str) -> Vec<(String, String)> {
         })
         .collect()
 }
-const XAI_API_BASE_URL_DEFAULT: &str = "https://api.x.ai/v1";
+// mlx-node fork: API-key inference and the `/models` prefetch default to the
+// local mlx-node host (`/v1/models`, `/v1/messages`, `/v1/responses`).
+const XAI_API_BASE_URL_DEFAULT: &str = "http://127.0.0.1:8080/v1";
 impl Default for EndpointsConfig {
     fn default() -> Self {
         Self {

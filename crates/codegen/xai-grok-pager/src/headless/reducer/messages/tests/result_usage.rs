@@ -21,6 +21,7 @@ fn messages_usage_drops_reasoning_tokens() {
             cache_read_input_tokens: 1,
             cache_creation_input_tokens: 0,
             reasoning_tokens: 9,
+            perf: None,
         }),
         signature: None,
         stop_sequence: None,
@@ -50,6 +51,7 @@ fn turn_usage_does_not_stamp_the_sum_on_one_assistant_message() {
             cache_read_input_tokens: 400,
             cache_creation_input_tokens: 25,
             reasoning_tokens: 10,
+            perf: None,
         },
     }));
     out.extend(r.finish(&turn_end("end_turn", "done")));

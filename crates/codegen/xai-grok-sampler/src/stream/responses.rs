@@ -756,6 +756,7 @@ pub(crate) fn stream_responses_tracked<'a>(
             message_id: None,   // no provider message id on the Responses API
             raw_stop_reason,
             stop_sequence: None,
+            perf: None,
         };
 
         yield SamplingEvent::Completed {

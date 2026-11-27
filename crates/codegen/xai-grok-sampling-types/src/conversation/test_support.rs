@@ -141,6 +141,7 @@ pub(super) fn make_response(message: ConversationItem) -> ConversationResponse {
         message_id: None,
         raw_stop_reason: None,
         stop_sequence: None,
+        perf: None,
     }
 }
 

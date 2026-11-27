@@ -1020,9 +1020,10 @@ fn symlinked_default_home_keeps_home_label() {
     let real_grok = tmp.path().join("grok-on-disk");
     std::fs::create_dir_all(&fake_home).unwrap();
     std::fs::create_dir_all(&real_grok).unwrap();
-    std::os::unix::fs::symlink(&real_grok, fake_home.join(".grok")).unwrap();
     let _home = crate::test_util::EnvVarGuard::set("HOME", &fake_home);
-    let resolved = dunce::canonicalize(&fake_home).unwrap().join(".grok");
+    // The fork names the default home `.mlx-agent`, not `.grok`.
+    let resolved = xai_grok_config::default_grok_home();
+    std::os::unix::fs::symlink(&real_grok, &resolved).unwrap();
     let canonical = dunce::canonicalize(&resolved).unwrap();
     assert_ne!(canonical, resolved, "the symlink must actually resolve");
     assert_eq!(

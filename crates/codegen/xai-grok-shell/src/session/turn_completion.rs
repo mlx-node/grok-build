@@ -17,6 +17,8 @@ pub(crate) fn build_turn_completed(
     error_kind: Option<SamplingErrorKind>,
     usage: Option<crate::extensions::notification::PromptUsage>,
     elapsed_ms: Option<u64>,
+    // mlx-node fork: the turn's last-response perf counters (MLX server extension).
+    perf: Option<xai_grok_sampling_types::TurnPerf>,
 ) -> SessionUpdate {
     SessionUpdate::TurnCompleted {
         prompt_id,
@@ -28,6 +30,7 @@ pub(crate) fn build_turn_completed(
         error_kind: error_kind.map(|k| k.as_ref().to_string()),
         usage,
         elapsed_ms,
+        perf,
     }
 }
 
@@ -79,6 +82,7 @@ mod tests {
             None,
             None,
             Some(1500),
+            None,
         );
         assert_eq!(
             update,
@@ -89,6 +93,7 @@ mod tests {
                 error_kind: None,
                 usage: None,
                 elapsed_ms: Some(1500),
+                perf: None,
             }
         );
     }
@@ -103,6 +108,7 @@ mod tests {
             None,
             None,
             Some(0),
+            None,
         );
         assert_eq!(
             update,
@@ -113,6 +119,7 @@ mod tests {
                 error_kind: None,
                 usage: None,
                 elapsed_ms: Some(0),
+                perf: None,
             }
         );
     }
@@ -126,6 +133,7 @@ mod tests {
             None,
             None,
             Some(42),
+            None,
         );
         assert!(matches!(
             update,
@@ -145,6 +153,7 @@ mod tests {
             None,
             None,
             Some(7),
+            None,
         );
         assert_eq!(
             update,
@@ -155,6 +164,7 @@ mod tests {
                 error_kind: None,
                 usage: None,
                 elapsed_ms: Some(7),
+                perf: None,
             }
         );
     }
@@ -168,11 +178,13 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(matches!(
             update,
             SessionUpdate::TurnCompleted {
                 elapsed_ms: None,
+                perf: None,
                 ..
             }
         ));
@@ -187,6 +199,7 @@ mod tests {
             Some(SamplingErrorKind::MaxTokensTruncation),
             None,
             Some(3),
+            None,
         );
         assert!(matches!(
             update,

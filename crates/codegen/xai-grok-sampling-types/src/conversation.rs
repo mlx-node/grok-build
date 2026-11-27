@@ -816,6 +816,28 @@ impl From<Usage> for TokenUsage {
     }
 }
 
+// mlx-node fork: per-response perf counters the local MLX server stamps on
+// the terminal `message_delta.usage` (kept off `TokenUsage`, which is `Eq`
+// and these counters are `f64`). All optional; `None` on other backends.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct TurnPerf {
+    /// Server-measured time to first token for this response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttft_ms: Option<f64>,
+    /// Server-measured prefill throughput (tokens/second).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefill_tokens_per_second: Option<f64>,
+    /// Server-measured decode throughput (tokens/second).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decode_tokens_per_second: Option<f64>,
+    /// Prompt tokens actually prefilled (the uncached prefix).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefill_input_tokens: Option<u32>,
+    /// Prompt tokens served from the server's prefix cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_prefix_tokens: Option<u32>,
+}
+
 /// Response from a conversation turn.
 /// Helpers (`assistant()`, `empty_reason()`, etc.) treat the trailing Assistant as "the response message" for backwards-compatible call sites.
 #[derive(Debug, Clone)]
@@ -853,6 +875,9 @@ pub struct ConversationResponse {
     /// Present only when the model stopped on a configured stop sequence.
     /// `None` otherwise and on backends that do not report one (OAI Chat Completions / Responses).
     pub stop_sequence: Option<String>,
+    /// mlx-node fork: per-response perf counters (prefill/decode tok/s, cache share).
+    /// `None` when the backend does not report them.
+    pub perf: Option<TurnPerf>,
 }
 
 /// Normalize a wire cost-ticks value at capture.
@@ -3307,6 +3332,7 @@ mod tests {
             message_id: None,
             raw_stop_reason: None,
             stop_sequence: None,
+            perf: None,
         };
         assert_eq!(
             response.fallback_text().as_deref(),
@@ -3328,6 +3354,7 @@ mod tests {
             message_id: None,
             raw_stop_reason: None,
             stop_sequence: None,
+            perf: None,
         };
         assert!(response.fallback_text().is_none());
     }
@@ -3346,6 +3373,7 @@ mod tests {
             message_id: None,
             raw_stop_reason: None,
             stop_sequence: None,
+            perf: None,
         };
         assert!(response.fallback_text().is_none());
     }
@@ -3366,6 +3394,7 @@ mod tests {
             message_id: None,
             raw_stop_reason: None,
             stop_sequence: None,
+            perf: None,
         };
         assert_eq!(
             response.fallback_text().as_deref(),
@@ -3391,6 +3420,7 @@ mod tests {
             message_id: None,
             raw_stop_reason: None,
             stop_sequence: None,
+            perf: None,
         };
         assert!(response.fallback_text().is_none());
     }

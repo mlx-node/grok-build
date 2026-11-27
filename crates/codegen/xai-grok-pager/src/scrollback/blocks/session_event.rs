@@ -52,6 +52,9 @@ pub enum SessionEvent {
         /// Wall-clock elapsed time for the turn.
         /// `None` when unknown: a wake turn whose deltas carried no `turnStartMs` (old shells) renders without a duration instead of a fake "0.0s".
         elapsed: Option<Duration>,
+        /// mlx-node fork: the turn's last-response perf counters (prefill/decode tok/s, cache share).
+        /// `None` on old shells and other backends; renders the "Worked for X" line unchanged.
+        perf: Option<xai_grok_shell::extensions::notification::TurnPerf>,
     },
     /// Agent turn was cancelled.
     TurnCancelled {
@@ -375,10 +378,33 @@ impl SessionEvent {
             // Deliberately period-less: don't re-punctuate
             SessionEvent::TurnCompleted {
                 elapsed: Some(elapsed),
+                perf,
             } => {
-                format!("Worked for {}", format_duration(*elapsed))
+                // mlx-node fork: append prefill/decode throughput and the
+                // prefix-cache hit share when the server reported them.
+                let mut msg = format!("Worked for {}", format_duration(*elapsed));
+                if let Some(perf) = perf {
+                    if let Some(tps) = perf.prefill_tokens_per_second {
+                        msg.push_str(&format!(" · ↑{} tok/s prefill", tps.round() as u64));
+                    }
+                    if let Some(tps) = perf.decode_tokens_per_second {
+                        msg.push_str(&format!(" · ↓{} tok/s decode", tps.round() as u64));
+                    }
+                    if let (Some(cached), Some(prefill)) =
+                        (perf.cached_prefix_tokens, perf.prefill_input_tokens)
+                    {
+                        let total = u64::from(cached) + u64::from(prefill);
+                        if total > 0 {
+                            msg.push_str(&format!(
+                                " · {}% cached",
+                                u64::from(cached) * 100 / total
+                            ));
+                        }
+                    }
+                }
+                msg
             }
-            SessionEvent::TurnCompleted { elapsed: None } => "Turn completed.".to_string(),
+            SessionEvent::TurnCompleted { elapsed: None, .. } => "Turn completed.".to_string(),
             SessionEvent::TurnCancelled {
                 elapsed: Some(elapsed),
                 cause,
@@ -823,8 +849,41 @@ mod tests {
     fn turn_completed_message() {
         let event = SessionEvent::TurnCompleted {
             elapsed: Some(Duration::from_secs(125)),
+            perf: None,
         };
         assert_eq!(event.message(), "Worked for 2m5s");
+    }
+
+    #[test]
+    fn turn_completed_message_appends_mlx_perf() {
+        // mlx-node fork: prefill/decode throughput and the prefix-cache hit share ride the marker.
+        let event = SessionEvent::TurnCompleted {
+            elapsed: Some(Duration::from_secs(45) + Duration::from_millis(200)),
+            perf: Some(xai_grok_shell::extensions::notification::TurnPerf {
+                ttft_ms: Some(450.2),
+                prefill_tokens_per_second: Some(412.5),
+                decode_tokens_per_second: Some(38.1),
+                prefill_input_tokens: Some(200),
+                cached_prefix_tokens: Some(2100),
+            }),
+        };
+        assert_eq!(
+            event.message(),
+            "Worked for 45s · ↑413 tok/s prefill · ↓38 tok/s decode · 91% cached"
+        );
+    }
+
+    #[test]
+    fn turn_completed_message_skips_absent_perf_fields() {
+        // Partial reports render only the parts the server sent.
+        let event = SessionEvent::TurnCompleted {
+            elapsed: Some(Duration::from_secs(1)),
+            perf: Some(xai_grok_shell::extensions::notification::TurnPerf {
+                decode_tokens_per_second: Some(38.0),
+                ..Default::default()
+            }),
+        };
+        assert_eq!(event.message(), "Worked for 1.0s · ↓38 tok/s decode");
     }
 
     #[test]
@@ -1521,6 +1580,7 @@ mod tests {
     fn non_recap_events_stay_non_interactive() {
         let block = SessionEventBlock::new(SessionEvent::TurnCompleted {
             elapsed: Some(Duration::from_secs(5)),
+            perf: None,
         });
         assert!(!block.is_foldable());
         assert!(!block.is_selectable());

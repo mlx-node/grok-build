@@ -4537,7 +4537,10 @@ pub(crate) fn resolve_aux_model_sampling_config(
                 max_completion_tokens: None,
                 temperature: None,
                 top_p: None,
-                api_backend: ApiBackend::Responses,
+                // mlx fork: aux side-calls (session title, image describe,
+                // summaries) target a local mlx server that only speaks the
+                // Anthropic Messages API — upstream hardcoded Responses here.
+                api_backend: ApiBackend::Messages,
                 auth_scheme: Default::default(),
                 extra_headers: IndexMap::new(),
                 query_params: IndexMap::new(),
@@ -4771,7 +4774,9 @@ fn resolve_hidden_default_web_search_sampling_config(
             max_completion_tokens: None,
             temperature: None,
             top_p: None,
-            api_backend: ApiBackend::Responses,
+            // mlx fork: hidden web-search fallback also routes to the local
+            // mlx server, which only implements /v1/messages.
+            api_backend: ApiBackend::Messages,
             auth_scheme: Default::default(),
             extra_headers: IndexMap::new(),
             query_params: IndexMap::new(),

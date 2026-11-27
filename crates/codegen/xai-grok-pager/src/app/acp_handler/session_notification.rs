@@ -126,6 +126,8 @@ fn synthesize_replay_turn_marker(
     agent_result: Option<&str>,
     error_kind: Option<crate::app::error_display::WireErrorType>,
     elapsed_ms: Option<u64>,
+    // mlx-node fork: the turn's perf counters persisted on `TurnCompleted` replay.
+    perf: Option<xai_grok_shell::extensions::notification::TurnPerf>,
     meta: Option<&serde_json::Value>,
 ) -> Option<crate::scrollback::blocks::SessionEvent> {
     use crate::app::turn_completion::{
@@ -164,6 +166,7 @@ fn synthesize_replay_turn_marker(
             cancellation_category,
             error_kind,
             error_banner_present: banner,
+            perf,
         })
     };
     marker.or_else(|| {
@@ -338,6 +341,7 @@ pub(super) fn handle_session_notification_with_origin(
             agent_result,
             error_kind,
             elapsed_ms,
+            perf,
             ..
         } => {
             let error_kind = crate::app::error_display::wire_error_kind(error_kind.as_deref());
@@ -352,6 +356,7 @@ pub(super) fn handle_session_notification_with_origin(
                         agent_result.as_deref(),
                         error_kind,
                         elapsed_ms,
+                        perf,
                         session_notif.meta.as_ref(),
                     )
                 {
@@ -412,6 +417,7 @@ pub(super) fn handle_session_notification_with_origin(
                                 session_notif.meta.as_ref(),
                                 super::super::turn_completion::CANCELLATION_CATEGORY_KEY,
                             ),
+                            perf,
                         },
                     );
                     true
@@ -449,6 +455,7 @@ pub(super) fn handle_session_notification_with_origin(
                                 m.get(super::super::turn_completion::CANCELLATION_CONTEXT_KEY)
                             }),
                             error_kind,
+                            perf,
                         },
                     ));
                 false
@@ -1532,6 +1539,7 @@ pub(super) fn handle_child_session_notification(
             agent_result,
             error_kind,
             elapsed_ms,
+            perf,
             ..
         } => {
             if NotificationMeta::from_json(meta.and_then(|v| v.as_object())).is_replay {
@@ -1561,6 +1569,7 @@ pub(super) fn handle_child_session_notification(
                         error_kind: crate::app::error_display::wire_error_kind(
                             error_kind.as_deref(),
                         ),
+                        perf,
                     },
                     elapsed_ms,
                 );

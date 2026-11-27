@@ -17,8 +17,14 @@ pub struct GrokBuildEndpoints {
     pub gateway_ws_url: &'static str,
     pub ws_origin: &'static str,
 }
+// mlx-node fork: the forked agent defaults every service that resolves
+// through `proxy_url()` to the local mlx-node inference host. All of these
+// stay env-overridable (`GROK_CLI_CHAT_PROXY_BASE_URL`, `GROK_MODELS_BASE_URL`,
+// `GROK_XAI_API_BASE_URL`, …), so an operator can still point the binary at
+// the real xAI endpoints.
+const MLX_LOCAL_BASE_URL: &str = "http://127.0.0.1:8080/v1";
 const PRODUCTION_ENDPOINTS: GrokBuildEndpoints = GrokBuildEndpoints {
-    cli_chat_proxy_base_url: "https://cli-chat-proxy.grok.com/v1",
+    cli_chat_proxy_base_url: MLX_LOCAL_BASE_URL,
     asset_server_url: "https://assets.grok.com",
     relay_ws_url: "wss://code.grok.com/ws/code-agent",
     gateway_ws_url: "wss://grok.com/ws/gw/",

@@ -1,4 +1,5 @@
 //! The logo is hidden entirely on legacy Windows consoles: the ConHost raster fonts do not cover the U+2800 braille block, so it renders as tofu.
+//! The MLX fork always hides it: the brand mark is the version badge text, and the hidden path is the same one legacy consoles already use.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
@@ -73,8 +74,9 @@ fn pick_logo_for(window_height: u16, hidden: bool) -> Option<&'static str> {
 }
 
 /// The braille art has no ASCII stand-in; see the module doc.
+/// Always true in the MLX fork: no logomark is painted on the welcome screen.
 fn logo_hidden() -> bool {
-    crate::glyphs::is_legacy_windows_console()
+    true
 }
 
 fn non_empty_lines(logo: &str) -> impl Iterator<Item = &str> {

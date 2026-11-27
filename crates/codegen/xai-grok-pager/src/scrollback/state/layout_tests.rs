@@ -143,6 +143,7 @@ fn collapsed_turn_marker_keeps_gap_from_collapsed_neighbors() {
     state.push_block(tool_block("wait two"));
     let marker = state.push_block(RenderBlock::session_event(SessionEvent::TurnCompleted {
         elapsed: Some(Duration::from_secs(3)),
+        perf: None,
     }));
     state
         .get_by_id_mut(marker)
