@@ -23,6 +23,9 @@ pub enum MigrationError {
     #[error("{section} is not a table")]
     NotATable { section: &'static str },
 
+    #[error("{path} is the home folder, which has no project folder; run the import in a project")]
+    NoProjectFolder { path: PathBuf },
+
     #[error("{section} is not an array")]
     NotAnArray { section: String },
 

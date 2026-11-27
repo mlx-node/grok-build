@@ -12,13 +12,20 @@ pub struct Doc {
     pub content: &'static str,
 }
 
+impl Doc {
+    /// The markdown with grok-build's `~/.grok` and `.grok` paths named as this agent's.
+    pub fn display_content(&self) -> String {
+        xai_dirs::rewrite_doc_paths(self.content, &xai_dirs::display_grok_home())
+    }
+}
+
 /// Owned variant for the TUI doc picker (backward compat).
 #[derive(Debug, Clone)]
 pub struct DocEntry {
     pub title: String,
     pub description: String,
-    /// Embedded markdown content.
-    pub content: &'static str,
+    /// [`Doc::display_content`].
+    pub content: String,
 }
 
 impl From<&Doc> for DocEntry {
@@ -26,7 +33,7 @@ impl From<&Doc> for DocEntry {
         Self {
             title: d.title.into(),
             description: d.description.into(),
-            content: d.content,
+            content: d.display_content(),
         }
     }
 }
@@ -248,7 +255,7 @@ pub fn extract_user_guide_docs(grok_home: &std::path::Path) {
         return;
     }
     for doc in USER_GUIDE {
-        if let Err(e) = std::fs::write(docs_dir.join(doc.filename), doc.content) {
+        if let Err(e) = std::fs::write(docs_dir.join(doc.filename), doc.display_content()) {
             tracing::debug!(error = %e, filename = doc.filename, "Failed to extract user-guide doc");
         }
     }
@@ -349,6 +356,7 @@ mod tests {
         assert_eq!(titles.len(), USER_GUIDE.len() + REFERENCE_DOCS.len());
     }
 
+    #[serial_test::serial(GROK_HOME)]
     #[test]
     fn extract_writes_docs_and_cleans_stale() {
         let tmp = tempfile::tempdir().unwrap();
@@ -364,7 +372,12 @@ mod tests {
             let path = docs_dir.join(doc.filename);
             assert!(path.exists(), "Expected doc {} to exist", doc.filename);
             let got = std::fs::read_to_string(&path).unwrap();
-            assert_eq!(got, doc.content, "Content mismatch for {}", doc.filename);
+            assert_eq!(
+                got,
+                doc.display_content(),
+                "Content mismatch for {}",
+                doc.filename
+            );
         }
         assert!(
             !docs_dir.join("99-removed.md").exists(),
@@ -374,5 +387,32 @@ mod tests {
             docs_dir.join("notes.md").exists(),
             "User file should not be deleted"
         );
+    }
+
+    #[test]
+    fn extracted_docs_name_the_agent_home_and_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        extract_user_guide_docs(tmp.path());
+        let docs_dir = tmp.path().join("docs").join("user-guide");
+        let all: String = USER_GUIDE
+            .iter()
+            .map(|doc| std::fs::read_to_string(docs_dir.join(doc.filename)).unwrap())
+            .collect();
+        for needle in ["~/.grok", ".grok/", "`.grok`", "\\.grok\\"] {
+            assert!(
+                !all.contains(needle),
+                "{needle:?} left in the extracted docs"
+            );
+        }
+        for kept in [
+            ".mlx-agent/",
+            "`.grok-plugin/marketplace.json`",
+            "macOS MDM `ai.x.grok`",
+        ] {
+            assert!(
+                all.contains(kept),
+                "{kept:?} missing from the extracted docs"
+            );
+        }
     }
 }

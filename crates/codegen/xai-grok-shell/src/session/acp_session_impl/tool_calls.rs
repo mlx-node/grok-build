@@ -360,39 +360,46 @@ impl SessionActor {
         }
         let mut final_result: Option<ToolLoop> = None;
         let mut deferred_followups: Vec<ConversationItem> = Vec::new();
-        let tool_calls = self.reject_excess_media_gen_calls(tool_calls).await?;
-        if !tool_calls.is_empty() {
-            if tool_calls.len() > 1 {
-                let kind_of = |name: &str| self.agent.borrow().tool_bridge().tool_kind(name);
-                let (body, tail) = split_exit_plan_tail(tool_calls, kind_of);
-                if !body.is_empty() {
+        let absent_agent_dirs = self.absent_project_agent_dirs();
+        let round = async {
+            let tool_calls = self.reject_excess_media_gen_calls(tool_calls).await?;
+            if !tool_calls.is_empty() {
+                if tool_calls.len() > 1 {
+                    let kind_of = |name: &str| self.agent.borrow().tool_bridge().tool_kind(name);
+                    let (body, tail) = split_exit_plan_tail(tool_calls, kind_of);
+                    if !body.is_empty() {
+                        self.execute_tool_calls_batch(
+                            body,
+                            &mut deferred_followups,
+                            &mut final_result,
+                            requested_model.as_deref(),
+                        )
+                        .await?;
+                    }
+                    if !tail.is_empty() {
+                        self.execute_tool_calls_batch(
+                            tail,
+                            &mut deferred_followups,
+                            &mut final_result,
+                            requested_model.as_deref(),
+                        )
+                        .await?;
+                    }
+                } else {
                     self.execute_tool_calls_batch(
-                        body,
+                        tool_calls,
                         &mut deferred_followups,
                         &mut final_result,
                         requested_model.as_deref(),
                     )
                     .await?;
                 }
-                if !tail.is_empty() {
-                    self.execute_tool_calls_batch(
-                        tail,
-                        &mut deferred_followups,
-                        &mut final_result,
-                        requested_model.as_deref(),
-                    )
-                    .await?;
-                }
-            } else {
-                self.execute_tool_calls_batch(
-                    tool_calls,
-                    &mut deferred_followups,
-                    &mut final_result,
-                    requested_model.as_deref(),
-                )
-                .await?;
             }
+            Ok::<(), acp::Error>(())
         }
+        .await;
+        Self::adopt_model_made_agent_dirs(absent_agent_dirs);
+        round?;
         {
             let _span = if !deferred_followups.is_empty() {
                 Some(
@@ -415,6 +422,39 @@ impl SessionActor {
             return Ok(final_result);
         }
         Ok(ToolLoop::Continue)
+    }
+    /// The project agent folders absent before a tool round. A tool (the model's `mkdir`, a write) may create one;
+    /// [`Self::adopt_model_made_agent_dirs`] then gives it the `.gitignore` that keeps it out of git.
+    fn absent_project_agent_dirs(&self) -> Vec<std::path::PathBuf> {
+        self.project_agent_dirs
+            .get_or_init(|| {
+                xai_grok_agent::repo::RepoDirChain::resolve(self.tool_context.cwd.as_path())
+                    .dirs
+                    .iter()
+                    .filter_map(|dir| xai_dirs::project_agent_dir(dir))
+                    .collect()
+            })
+            .iter()
+            .filter(|folder| {
+                matches!(
+                    std::fs::symlink_metadata(folder),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound
+                )
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn adopt_model_made_agent_dirs(absent: Vec<std::path::PathBuf>) {
+        for folder in absent {
+            if let Err(error) = xai_dirs::adopt_created_project_agent_dir(&folder) {
+                tracing::warn!(
+                    %error,
+                    folder = %folder.display(),
+                    "failed to write the project agent folder's .gitignore"
+                );
+            }
+        }
     }
     /// Per-name media-gen counts that exceed this session's cap.
     pub(super) fn media_gen_over_cap(

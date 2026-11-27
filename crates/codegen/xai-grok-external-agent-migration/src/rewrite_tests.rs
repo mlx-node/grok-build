@@ -1,6 +1,6 @@
 use super::{
-    apply_import, apply_items_to_config, merge_env_vars, merge_paths, merge_permissions,
-    write_import_marker,
+    apply_import, apply_import_in, apply_items_to_config, merge_env_vars, merge_paths,
+    merge_permissions, write_import_marker,
 };
 use crate::{
     ImportPatternMode, ImportPermission, ImportPlan, ImportRuleAction, ImportScope, ImportTool,
@@ -229,6 +229,70 @@ fn apply_items_to_config_writes_path_entries() {
     );
 }
 
+fn project_plan() -> ImportPlan {
+    ImportPlan {
+        project_items: vec![
+            ImportableItem::PathEntry {
+                kind: PathKind::Skill,
+                path: "/foo/skills".into(),
+            },
+            ImportableItem::Hook {
+                event: "PreToolUse".to_string(),
+                matcher: Some("Bash".to_string()),
+                command: "echo x".to_string(),
+                timeout: None,
+            },
+        ],
+        ..ImportPlan::default()
+    }
+}
+
+#[test]
+fn project_import_writes_the_agent_folder_and_leaves_git_clean() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let root = super::find_project_root(tmp.path());
+    let result = apply_import(&project_plan(), tmp.path()).unwrap();
+    assert_eq!(result.project_count, 2);
+    let folder = root.join(".mlx-agent");
+    assert!(folder.join("config.toml").is_file());
+    assert!(
+        folder
+            .join("hooks")
+            .join("imported-from-claude.json")
+            .is_file()
+    );
+    assert!(
+        !root.join(".grok").exists(),
+        "nothing is written under .grok"
+    );
+    assert_eq!(
+        std::fs::read_to_string(folder.join(".gitignore")).unwrap(),
+        "*\n"
+    );
+    let mut options = git2::StatusOptions::new();
+    options.include_untracked(true).recurse_untracked_dirs(true);
+    assert!(
+        repo.statuses(Some(&mut options)).unwrap().is_empty(),
+        "the import leaves git status clean"
+    );
+}
+
+#[test]
+fn project_import_in_the_home_folder_writes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let error = apply_import_in(&project_plan(), home, Some(home), None).unwrap_err();
+    assert!(
+        matches!(error, crate::MigrationError::NoProjectFolder { .. }),
+        "{error}"
+    );
+    assert!(
+        !home.join(".mlx-agent").exists(),
+        "the refusal wrote nothing"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn project_import_replaces_config_symlink_not_referent() {
@@ -236,7 +300,7 @@ fn project_import_replaces_config_symlink_not_referent() {
     git2::Repository::init(tmp.path()).unwrap();
     let outside = tmp.path().join("outside.toml");
     std::fs::write(&outside, "[paths]\nextra_rule_dirs = [\"/keep\"]\n").unwrap();
-    let project_cfg = tmp.path().join(".grok").join("config.toml");
+    let project_cfg = tmp.path().join(".mlx-agent").join("config.toml");
     std::fs::create_dir_all(project_cfg.parent().unwrap()).unwrap();
     std::os::unix::fs::symlink(&outside, &project_cfg).unwrap();
 

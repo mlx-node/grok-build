@@ -513,9 +513,9 @@ mod tests {
         };
 
         let cwd = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(cwd.path().join(".grok")).unwrap();
+        std::fs::create_dir_all(cwd.path().join(".mlx-agent")).unwrap();
         std::fs::write(
-            cwd.path().join(".grok").join("config.toml"),
+            cwd.path().join(".mlx-agent").join("config.toml"),
             r#"
 disabled_mcp_servers = ["corp"]
 
@@ -614,9 +614,9 @@ url = "https://denied.corp.com/mcp"
         }
         let cwd = tempfile::tempdir().unwrap();
         git2::Repository::init(cwd.path()).unwrap();
-        std::fs::create_dir_all(cwd.path().join(".grok")).unwrap();
+        std::fs::create_dir_all(cwd.path().join(".mlx-agent")).unwrap();
         std::fs::write(
-            cwd.path().join(".grok").join("config.toml"),
+            cwd.path().join(".mlx-agent").join("config.toml"),
             r#"
 [mcp_servers.projsrv]
 command = "echo"
@@ -769,9 +769,9 @@ command = "echo"
     fn filter_policy_blocked_agent_mcp_drops_enabled_false_name() {
         let cwd = tempfile::tempdir().unwrap();
         git2::Repository::init(cwd.path()).unwrap();
-        std::fs::create_dir_all(cwd.path().join(".grok")).unwrap();
+        std::fs::create_dir_all(cwd.path().join(".mlx-agent")).unwrap();
         std::fs::write(
-            cwd.path().join(".grok").join("config.toml"),
+            cwd.path().join(".mlx-agent").join("config.toml"),
             r#"
 [mcp_servers.agent_md_ks_adder]
 url = "https://toml.example/mcp"
@@ -793,9 +793,9 @@ enabled = false
     fn toml_loaders_agree_on_env_and_header_bearing_definitions() {
         let tmp = tempfile::tempdir().unwrap();
         git2::Repository::init(tmp.path()).unwrap();
-        std::fs::create_dir_all(tmp.path().join(".grok")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent")).unwrap();
         std::fs::write(
-            tmp.path().join(".grok").join("config.toml"),
+            tmp.path().join(".mlx-agent").join("config.toml"),
             r#"
 [mcp_servers.parity_stdio]
 command = "echo"
@@ -1458,9 +1458,9 @@ headers = { "X-A" = "1", "X-B" = "2", "X-C" = "3" }
     #[test]
     fn lower_precedence_http_servers_are_blocked_by_toml_name_claims() {
         let cwd = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(cwd.path().join(".grok")).unwrap();
+        std::fs::create_dir_all(cwd.path().join(".mlx-agent")).unwrap();
         std::fs::write(
-            cwd.path().join(".grok").join("config.toml"),
+            cwd.path().join(".mlx-agent").join("config.toml"),
             r#"
 [mcp_servers.github]
 url = "https://config.example.com/mcp"
@@ -1494,9 +1494,9 @@ enabled = false
 
     fn same_url_project_repo() -> tempfile::TempDir {
         let cwd = empty_cwd();
-        std::fs::create_dir_all(cwd.path().join(".grok")).unwrap();
+        std::fs::create_dir_all(cwd.path().join(".mlx-agent")).unwrap();
         std::fs::write(
-            cwd.path().join(".grok").join("config.toml"),
+            cwd.path().join(".mlx-agent").join("config.toml"),
             r#"
 [mcp_servers.gb5207-org1]
 url = "https://dup-url.example.test/mcp"
@@ -1654,9 +1654,9 @@ Authorization = "Bearer org2-token"
         );
 
         git2::Repository::init(cwd.path()).unwrap();
-        std::fs::create_dir_all(cwd.path().join(".grok")).unwrap();
+        std::fs::create_dir_all(cwd.path().join(".mlx-agent")).unwrap();
         std::fs::write(
-            cwd.path().join(".grok").join("config.toml"),
+            cwd.path().join(".mlx-agent").join("config.toml"),
             "[mcp_servers.plugsrv]\nurl = \"https://plug.example.test/mcp\"\nenabled = false\n",
         )
         .unwrap();

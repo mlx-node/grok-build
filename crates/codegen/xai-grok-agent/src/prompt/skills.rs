@@ -50,16 +50,18 @@ pub struct SkillsConfig {
 /// Empty discovery roots still require trust; only the supplied project roots are checked.
 pub fn has_project_skill_dirs_in<'a>(chain_dirs: impl IntoIterator<Item = &'a Path>) -> bool {
     // All vendors must gate regardless of the runtime compatibility settings.
-    let config_dirs = CompatConfig::default().skill_config_dirs();
+    let compat = CompatConfig::default();
     chain_dirs.into_iter().any(|dir| {
-        config_dirs.iter().any(|config_dir| {
-            let config_dir = dir.join(config_dir);
-            SKILL_SUBDIRS
-                .iter()
-                .copied()
-                .chain(std::iter::once(COMMAND_SUBDIR))
-                .any(|subdir| config_dir.join(subdir).is_dir())
-        })
+        compat
+            .project_skill_roots(dir)
+            .into_iter()
+            .any(|config_dir| {
+                SKILL_SUBDIRS
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(COMMAND_SUBDIR))
+                    .any(|subdir| config_dir.join(subdir).is_dir())
+            })
     })
 }
 
@@ -176,19 +178,16 @@ fn collect_skill_config_dirs_from_sources(
         }
     };
 
-    // Vendor dirs (`.claude`/`.cursor`) are gated by the resolved compat config; `.grok` and `.agents` are always present
-    // When all cells are on, this list equals the historical `[".grok", ".agents", ".claude", ".cursor"]`
-    let config_dir_names = compat.skill_config_dirs();
-
+    // Vendor dirs (`.claude`/`.cursor`) are gated by the resolved compat config; the agent folder and `.agents` are always present
     if let Some(project_sources) = project_sources {
         for dir in project_sources.skill_dirs() {
-            for name in &config_dir_names {
-                try_add(dir.join(name));
+            for root in compat.project_skill_roots(dir) {
+                try_add(root);
             }
         }
     }
 
-    // Priority 3: Global user dirs. `.grok` comes from `grok_home` (which may be overridden), so it's handled separately.
+    // Priority 3: Global user dirs. The agent home comes from `grok_home` (which may be overridden), so it's handled separately.
     // `.agents` is always added, while `.claude`/`.cursor` are gated by the skills compat cells
     try_add(grok_home);
     if let Some(home) = xai_dirs::home_dir() {
@@ -218,7 +217,7 @@ fn collect_skill_config_dirs_from_sources(
 
 /// Determine the skill scope for a config directory based on its location relative to `cwd`, `git_root`, and the user's home directory.
 fn scope_for_config_dir(dir: &Path, cwd: Option<&Path>, git_root: Option<&Path>) -> SkillScope {
-    // Home-level dirs (e.g. ~/.grok/, ~/.agents/, ~/.claude/) are User scope.
+    // Home-level dirs (e.g. ~/.mlx-agent/, ~/.agents/, ~/.claude/) are User scope.
     if let Some(home) = xai_dirs::home_dir()
         && dir.parent() == Some(home.as_path())
     {
@@ -695,7 +694,10 @@ mod tests {
         write_skill_md(&server.path().join("dup"), "dup");
 
         let cwd = tempfile::tempdir().unwrap();
-        write_skill_md(&cwd.path().join(".grok").join("skills").join("dup"), "dup");
+        write_skill_md(
+            &cwd.path().join(".mlx-agent").join("skills").join("dup"),
+            "dup",
+        );
 
         let config = SkillsConfig {
             server_skill_dirs: vec![server.path().to_string_lossy().into_owned()],
@@ -732,7 +734,10 @@ mod tests {
         write_skill_md(&bundled.path().join("dup"), "dup");
 
         let cwd = tempfile::tempdir().unwrap();
-        write_skill_md(&cwd.path().join(".grok").join("skills").join("dup"), "dup");
+        write_skill_md(
+            &cwd.path().join(".mlx-agent").join("skills").join("dup"),
+            "dup",
+        );
 
         let config = SkillsConfig {
             bundled_skill_dirs: vec![bundled.path().to_string_lossy().into_owned()],
@@ -864,7 +869,7 @@ mod tests {
 
     #[test]
     fn find_skill_paths_no_skills_dir() {
-        // .grok exists but no skills/ subdirectory
+        // .mlx-agent exists but no skills/ subdirectory
         let tmp = tempfile::tempdir().unwrap();
         let grok_dir = tmp.path().join(".grok");
         fs::create_dir_all(&grok_dir).unwrap();
@@ -1252,7 +1257,7 @@ mod tests {
         // Create workspace user dir with a skill
         let user_dir = repo_root.join("x").join("testuser");
         write_skill_md(
-            &user_dir.join(".grok").join("skills").join("my-tool"),
+            &user_dir.join(".mlx-agent").join("skills").join("my-tool"),
             "my-tool",
         );
 
@@ -1282,7 +1287,10 @@ mod tests {
         // User dir with a skill
         let user_dir = repo_root.join("x").join("testuser");
         write_skill_md(
-            &user_dir.join(".grok").join("skills").join("dedup-skill"),
+            &user_dir
+                .join(".mlx-agent")
+                .join("skills")
+                .join("dedup-skill"),
             "dedup-skill",
         );
 
@@ -1338,7 +1346,7 @@ mod tests {
 
         // User dir with nested skills
         let user_dir = repo_root.join("x").join("nested-user");
-        let skills_base = user_dir.join(".grok").join("skills");
+        let skills_base = user_dir.join(".mlx-agent").join("skills");
         write_skill_md(&skills_base.join("flat-skill"), "flat-skill");
         write_skill_md(&skills_base.join("team").join("deep-skill"), "deep-skill");
 
@@ -1724,8 +1732,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn project_skills_load_only_from_the_agent_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        write_skill_md(&repo.join(".grok/skills/grokmark"), "grokmark");
+        write_skill_md(&repo.join(".mlx-agent/skills/mlxmark"), "mlxmark");
+        init_git_repo(&repo);
+        let skills = list_skills(
+            Some(repo.to_str().unwrap()),
+            &SkillsConfig::default(),
+            CompatConfig::default(),
+            /*project_trusted*/ true,
+        )
+        .await;
+        assert!(skills.iter().any(|skill| skill.name == "mlxmark"));
+        assert!(!skills.iter().any(|skill| skill.name == "grokmark"));
+        fs::remove_dir_all(repo.join(".mlx-agent")).unwrap();
+        assert!(!has_project_skill_dirs_in([repo.as_path()]));
+    }
+
+    #[tokio::test]
     async fn untrusted_project_skills_are_omitted() {
-        for config_dir in [".grok", ".agents", ".claude", ".cursor"] {
+        for config_dir in [".mlx-agent", ".agents", ".claude", ".cursor"] {
             let tmp = tempfile::tempdir().unwrap();
             let repo = tmp.path().join("repo");
             let config_root = repo.join(config_dir);
@@ -1904,13 +1932,16 @@ mod tests {
         fs::create_dir_all(&repo_root).unwrap();
         init_git_repo(&repo_root);
 
-        let auto_dir = repo_root.join(".grok").join("skills").join("overlap-skill");
+        let auto_dir = repo_root
+            .join(".mlx-agent")
+            .join("skills")
+            .join("overlap-skill");
         write_skill_md(&auto_dir, "overlap-skill");
 
         let config = SkillsConfig {
             paths: vec![
                 repo_root
-                    .join(".grok")
+                    .join(".mlx-agent")
                     .join("skills")
                     .to_str()
                     .unwrap()
@@ -1991,15 +2022,15 @@ mod tests {
         init_git_repo(&repo_root);
 
         // Same skill name in local (higher-priority) and repo (lower-priority) sources.
-        write_skill_md(&cwd.join(".grok").join("skills").join("same"), "same");
-        let repo_skill_dir = repo_root.join(".grok").join("skills").join("same");
+        write_skill_md(&cwd.join(".mlx-agent").join("skills").join("same"), "same");
+        let repo_skill_dir = repo_root.join(".mlx-agent").join("skills").join("same");
         write_skill_md(&repo_skill_dir, "same");
 
         // Ignore the local skill path. Repo fallback should remain visible.
         let config = SkillsConfig {
             paths: vec![],
             ignore: vec![
-                cwd.join(".grok")
+                cwd.join(".mlx-agent")
                     .join("skills")
                     .to_str()
                     .unwrap()
@@ -2044,11 +2075,11 @@ mod tests {
         init_git_repo(&repo_root);
 
         write_skill_md(
-            &repo_root.join(".grok").join("skills").join("commit"),
+            &repo_root.join(".mlx-agent").join("skills").join("commit"),
             "commit",
         );
         write_skill_md(
-            &repo_root.join(".grok").join("skills").join("review"),
+            &repo_root.join(".mlx-agent").join("skills").join("review"),
             "review",
         );
 
@@ -2475,7 +2506,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
         // Not a git repo, so it falls to the cwd-only branch (no upward walk)
-        for name in [".grok", ".agents", ".claude", ".cursor"] {
+        for name in [".mlx-agent", ".agents", ".claude", ".cursor"] {
             fs::create_dir_all(cwd.join(name)).unwrap();
         }
 
@@ -2496,7 +2527,7 @@ mod tests {
             "cursor must be gated off: {dirs:?}"
         );
         assert!(ends_with(&dirs, ".claude"), "claude must remain: {dirs:?}");
-        assert!(ends_with(&dirs, ".grok"), "grok must remain: {dirs:?}");
+        assert!(ends_with(&dirs, ".mlx-agent"), "grok must remain: {dirs:?}");
     }
 
     // ── Same-scope frontmatter-name collisions (copied skill dirs) ──────
@@ -2602,7 +2633,7 @@ mod tests {
 
     #[test]
     fn dedupe_same_scope_cross_harness_loser_resurfaces() {
-        // A `.claude` skill claiming a `.grok`-owned name (both User scope) re-keys to its dir basename instead of being silently hidden
+        // A `.claude` skill claiming a `.mlx-agent`-owned name (both User scope) re-keys to its dir basename instead of being silently hidden
         let out = dedupe_skills(vec![
             named_skill(
                 "review",
@@ -2692,7 +2723,7 @@ mod tests {
         fs::create_dir_all(&repo_root).unwrap();
         init_git_repo(&repo_root);
 
-        let skills_dir = repo_root.join(".grok").join("skills");
+        let skills_dir = repo_root.join(".mlx-agent").join("skills");
         write_skill_md(&skills_dir.join("zz-copyfix-japandi"), "zz-copyfix-japandi");
         // The copy keeps the original's frontmatter name.
         write_skill_md(

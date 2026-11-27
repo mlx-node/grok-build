@@ -117,10 +117,10 @@ impl Fixture {
         }
     }
 
-    /// The workspace's `.grok/workspaced.toml` layer: it may only tighten the user's
+    /// The workspace's `.mlx-agent/workspaced.toml` layer: it may only tighten the user's
     /// mode, so `enforce` lands and `off` is ignored.
     fn set_mode(&self, mode: &str) {
-        let path = crate::sandbox_mode::workspace_config_path(&self.root);
+        let path = crate::sandbox_mode::workspace_config_path(&self.root, &self.grok_home).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         write_mode_file(&path, mode);
     }
@@ -1880,7 +1880,7 @@ async fn net_rows_carry_allow_and_deny_rows_and_no_fs_rows() {
     );
 }
 
-/// The workspace's `.grok/workspaced.toml` is read whatever the folder's trust: it can only
+/// The workspace's `.mlx-agent/workspaced.toml` is read whatever the folder's trust: it can only
 /// tighten, so an untrusted folder's `enforce` over the user's `observe` holds.
 #[tokio::test]
 async fn an_untrusted_workspace_can_tighten_the_mode() {
@@ -1944,7 +1944,10 @@ async fn set_workspace_mode_replies_with_the_effective_mode_and_its_source() {
     let sandbox = fx.open_without_backend().await;
 
     let (path, effective) = sandbox.set_workspace_mode(SandboxMode::Off).unwrap();
-    assert_eq!(crate::sandbox_mode::workspace_config_path(&fx.root), path);
+    assert_eq!(
+        crate::sandbox_mode::workspace_config_path(&fx.root, &fx.grok_home).unwrap(),
+        path
+    );
     assert_eq!(
         "[sandbox]\nmode = \"off\"\n",
         std::fs::read_to_string(&path).unwrap()
@@ -2022,8 +2025,8 @@ async fn the_control_socket_dir_is_protected_by_every_built_policy() {
         policy.protected
     );
     assert!(
-        policy.is_protected(&fx.root.join(".grok/settings.toml")),
-        "the workspace layer lives under the protected .grok/"
+        policy.is_protected(&fx.root.join(".mlx-agent/settings.toml")),
+        "the workspace layer lives under the protected .mlx-agent/"
     );
 
     let mut stripped = sandbox

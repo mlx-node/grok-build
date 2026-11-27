@@ -269,10 +269,16 @@ fn discover_auto_sources(cwd: &str, skills: &[SkillInfo]) -> Vec<(String, usize)
     // Import writes those dirs to [paths] extra_skill_dirs for the source UI.
     // list_skills_with_plugins still does not read extra_skill_dirs.
     let imported = crate::claude_import::is_claude_import_marked();
-    let local_dir_names: &[&str] = if imported {
-        &[".grok", ".agents"]
+    let vendor_dir_names: &[&str] = if imported {
+        &[".agents"]
     } else {
-        &[".grok", ".agents", ".claude"]
+        &[".agents", ".claude"]
+    };
+    let local_roots = |dir: &std::path::Path| -> Vec<std::path::PathBuf> {
+        xai_dirs::project_agent_dir(dir)
+            .into_iter()
+            .chain(vendor_dir_names.iter().map(|name| dir.join(name)))
+            .collect()
     };
 
     let mut sources: Vec<(String, usize)> = Vec::new();
@@ -288,18 +294,18 @@ fn discover_auto_sources(cwd: &str, skills: &[SkillInfo]) -> Vec<(String, usize)
     };
 
     let mut local_dirs: Vec<std::path::PathBuf> = Vec::new();
-    for dir_name in local_dir_names {
+    for root in local_roots(&cwd_path) {
         for subdir in &subdirs {
-            let dir = cwd_path.join(dir_name).join(subdir);
+            let dir = root.join(subdir);
             try_add_source(dir.clone(), None);
             local_dirs.push(dir);
         }
     }
 
-    if let Some(ref root) = git_root {
-        for dir_name in local_dir_names {
+    if let Some(ref git_root) = git_root {
+        for root in local_roots(git_root) {
             for subdir in &subdirs {
-                try_add_source(root.join(dir_name).join(subdir), Some(&local_dirs));
+                try_add_source(root.join(subdir), Some(&local_dirs));
             }
         }
     }

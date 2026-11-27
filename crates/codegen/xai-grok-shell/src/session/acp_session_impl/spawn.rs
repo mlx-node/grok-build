@@ -1956,6 +1956,7 @@ pub(crate) async fn spawn_session_actor(
         rate_limit_waits: RateLimitWaitConfig::with_max_attempts(subagent_rate_limit_max_attempts),
         pending_interjections: InterjectionBuffer::new(),
         pending_skill_reminders: Mutex::new(Vec::new()),
+        project_agent_dirs: std::sync::OnceLock::new(),
         idle_flush_timeout: memory_config
             .as_ref()
             .filter(|mc| mc.mode.is_legacy())

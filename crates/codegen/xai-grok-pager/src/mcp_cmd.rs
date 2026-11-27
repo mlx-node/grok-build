@@ -23,7 +23,7 @@ Examples:
   # Add a remote server with an authentication header
   grok mcp add --transport http api https://mcp.example.com/mcp --header \"Authorization: Bearer YOUR_TOKEN\"
 
-  # Add to the project config (./.grok/config.toml) instead of ~/.grok/config.toml
+  # Add to the project config (./.mlx-agent/config.toml, local to this folder) instead of the user config
   grok mcp add --scope project github -- npx -y @modelcontextprotocol/server-github";
 
 #[derive(Debug, clap::Args, Clone)]
@@ -46,9 +46,9 @@ pub enum McpTransport {
 /// Which config file an MCP server definition is written to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum McpScope {
-    /// `~/.grok/config.toml`, available in all your projects
+    /// `config.toml` in the agent home, available in all your projects
     User,
-    /// `./.grok/config.toml`, shared with everyone working in this directory
+    /// `./.mlx-agent/config.toml`, local to this folder
     Project,
 }
 
@@ -120,7 +120,7 @@ pub struct AddArgs {
     #[arg(short = 't', long, value_enum)]
     transport: Option<McpTransport>,
 
-    /// Config to write to: user (~/.grok/config.toml) or project (./.grok/config.toml)
+    /// Config to write to: user (~/.grok/config.toml) or project (./.mlx-agent/config.toml)
     #[arg(short = 's', long, value_enum, default_value = "user")]
     scope: McpScope,
 
@@ -520,9 +520,19 @@ fn current_dir_or_exit() -> PathBuf {
 fn scope_target(scope: McpScope) -> PathBuf {
     match scope {
         McpScope::User => xai_grok_shell::util::config::user_config_path(),
-        McpScope::Project => {
-            xai_grok_shell::util::config::project_config_path(&current_dir_or_exit())
-        }
+        McpScope::Project => project_add_target(&current_dir_or_exit()).unwrap_or_else(|message| {
+            eprintln!("{message}");
+            std::process::exit(1);
+        }),
+    }
+}
+
+/// The project config `mcp add` writes, creating the project agent folder (and its `.gitignore`) first.
+fn project_add_target(cwd: &Path) -> Result<PathBuf, String> {
+    match xai_dirs::ensure_project_agent_dir(cwd) {
+        Ok(Some(folder)) => Ok(folder.join(xai_grok_config::USER_CONFIG_FILENAME)),
+        Ok(None) => Err("No project folder in the home folder; run this in a project.".to_owned()),
+        Err(error) => Err(format!("Failed to create the project folder: {error}")),
     }
 }
 
@@ -741,7 +751,7 @@ async fn run_remove(name: &str, requested_scope: Option<McpScope>) -> Result<()>
     println!("Removed MCP server '{name}' from {} config", scope.label());
     println!("File modified: {}", scope_display(scope, &path));
 
-    // A scoped delete can leave the name defined in the other scope or an ancestor .grok/config.toml, where it still resolves for sessions
+    // A scoped delete can leave the name defined in the other scope or an ancestor .mlx-agent/config.toml, where it still resolves for sessions
     let still_user_defined = mcp_server_defined_at(&user_config_path(), name);
     if let Some((survivor_scope, remaining)) =
         surviving_definition(still_user_defined, find_project_site())
@@ -1317,7 +1327,7 @@ mod tests {
 
     #[test]
     fn grok_com_known_only_with_toml_definition() {
-        // Unique name: `grok_home()` is process-wide OnceLock, so GROK_HOME. `grok_com_*` in the real ~/.grok disabled
+        // Unique name: `grok_home()` is process-wide OnceLock, so GROK_HOME. `grok_com_*` in the real ~/.mlx-agent disabled
         // list would fail an orphan assertion on a well-known name.
         let name = format!("grok_com_orphan_{}", uuid::Uuid::new_v4().as_simple());
 
@@ -1329,11 +1339,11 @@ mod tests {
         );
 
         let defined = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(defined.path().join(".grok")).unwrap();
+        std::fs::create_dir_all(defined.path().join(".mlx-agent")).unwrap();
         std::fs::write(
             defined
                 .path()
-                .join(".grok")
+                .join(".mlx-agent")
                 .join(xai_grok_config::USER_CONFIG_FILENAME),
             format!(
                 r#"
@@ -1398,6 +1408,26 @@ url = "https://mcp.example.test/sse"
         let err = PagerArgs::try_parse_from(["grok", "mcp", "disable"])
             .expect_err("disable without name must fail");
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn project_add_target_creates_the_agent_folder_and_leaves_git_clean() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(tmp.path()).unwrap();
+        let path = project_add_target(tmp.path()).unwrap();
+        let folder = tmp.path().join(".mlx-agent");
+        assert_eq!(path, folder.join(xai_grok_config::USER_CONFIG_FILENAME));
+        std::fs::write(&path, "[mcp_servers.x]\ncommand = \"x\"\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(folder.join(".gitignore")).unwrap(),
+            "*\n"
+        );
+        let mut options = git2::StatusOptions::new();
+        options.include_untracked(true).recurse_untracked_dirs(true);
+        assert!(
+            repo.statuses(Some(&mut options)).unwrap().is_empty(),
+            "the writer leaves git status clean"
+        );
     }
 
     #[test]

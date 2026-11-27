@@ -1,4 +1,4 @@
-//! Agent definition types, parsed from `.grok/agents/*.md` files.
+//! Agent definition types, parsed from `.mlx-agent/agents/*.md` files.
 use crate::error::AgentBuildError;
 use crate::prompt::context::TemplateOverride;
 use crate::prompt::user_message::UserMessageTemplate;
@@ -689,7 +689,7 @@ impl BuiltinAgentName {
         &[Self::GeneralPurpose, Self::Explore, Self::Plan]
     }
 }
-/// Portable agent identity, parsed from .grok/agents/*.md. Usable as a top-level agent or a subagent.
+/// Portable agent identity, parsed from .mlx-agent/agents/*.md. Usable as a top-level agent or a subagent.
 /// Does not contain session-level policies; those are provided by the AgentBuilder at build time.
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -839,7 +839,7 @@ fn default_prompt_mode() -> PromptMode {
 /// Where the agent definition was discovered.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AgentScope {
-    /// .grok/agents/ (project-level, highest priority)
+    /// .mlx-agent/agents/ (project-level, highest priority)
     Project,
     /// ~/.grok/agents/ (user-level)
     User,
@@ -1058,11 +1058,11 @@ where
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum MemoryScope {
-    /// `~/.grok/agent-memory/<name>/`
+    /// `<agent home>/agent-memory/<name>/`
     User,
-    /// `<project>/.grok/agent-memory/<name>/`
+    /// `<project>/.mlx-agent/agent-memory/<name>/`
     Project,
-    /// `<project>/.grok/agent-memory-local/<name>/`
+    /// `<project>/.mlx-agent/agent-memory-local/<name>/`
     Local,
 }
 impl MemoryScope {
@@ -1076,25 +1076,36 @@ pub struct ResolvedMemoryDir {
     pub is_project_scoped: bool,
 }
 impl MemoryScope {
+    /// A project scope in a folder with no project agent folder (the home folder) uses the user dir.
     pub fn resolve_dir(self, agent_name: &str, project_cwd: &std::path::Path) -> ResolvedMemoryDir {
+        let project = |sub: &str| {
+            xai_dirs::project_agent_dir(project_cwd).map(|folder| ResolvedMemoryDir {
+                path: folder.join(sub).join(agent_name),
+                is_project_scoped: true,
+            })
+        };
+        let user = || ResolvedMemoryDir {
+            path: xai_grok_config::grok_home()
+                .join("agent-memory")
+                .join(agent_name),
+            is_project_scoped: false,
+        };
         match self {
-            Self::User => ResolvedMemoryDir {
-                path: xai_grok_config::grok_home()
-                    .join("agent-memory")
-                    .join(agent_name),
-                is_project_scoped: false,
-            },
-            Self::Project => ResolvedMemoryDir {
-                path: project_cwd.join(".grok/agent-memory").join(agent_name),
-                is_project_scoped: true,
-            },
-            Self::Local => ResolvedMemoryDir {
-                path: project_cwd
-                    .join(".grok/agent-memory-local")
-                    .join(agent_name),
-                is_project_scoped: true,
-            },
+            Self::User => user(),
+            Self::Project => project("agent-memory").unwrap_or_else(user),
+            Self::Local => project("agent-memory-local").unwrap_or_else(user),
         }
+    }
+
+    /// [`Self::resolve_dir`] for a writer: a project scope first creates the project agent folder,
+    /// so a folder this creates gets its `.gitignore` before any memory file lands in it.
+    pub fn prepare_dir(self, agent_name: &str, project_cwd: &std::path::Path) -> ResolvedMemoryDir {
+        if !matches!(self, Self::User)
+            && let Err(error) = xai_dirs::ensure_project_agent_dir(project_cwd)
+        {
+            tracing::warn!(%error, cwd = %project_cwd.display(), "failed to create the project agent folder");
+        }
+        self.resolve_dir(agent_name, project_cwd)
     }
 }
 /// Hooks config is validated as an object at parse time; semantic parsing is deferred to spawn.
@@ -1294,7 +1305,6 @@ impl AgentDefinition {
         Ok(def)
     }
     fn scope_from_path(path: &Path) -> AgentScope {
-        let path_str = path.to_string_lossy();
         let grok = xai_grok_config::user_grok_home();
         let home = xai_dirs::home_dir();
         for (dir, scope) in crate::discovery::user_agent_dirs(home.as_deref(), grok.as_deref()) {
@@ -1302,13 +1312,18 @@ impl AgentDefinition {
                 return scope;
             }
         }
-        if path_str.contains(".grok/agents/") || path_str.contains(".grok\\agents\\") {
-            return AgentScope::Project;
-        }
-        if path_str.contains(".grok/bundled/agents/")
-            || path_str.contains(".grok\\bundled\\agents\\")
+        let names: Vec<&std::ffi::OsStr> = path
+            .components()
+            .filter_map(|component| match component {
+                std::path::Component::Normal(name) => Some(name),
+                _ => None,
+            })
+            .collect();
+        if names
+            .windows(2)
+            .any(|pair| matches!(pair, [dir, agents] if xai_dirs::is_agent_dir_name(dir) && *agents == "agents"))
         {
-            return AgentScope::Bundled;
+            return AgentScope::Project;
         }
         AgentScope::BuiltIn
     }
@@ -2112,15 +2127,37 @@ description: Minimal agent
         let proj = MemoryScope::Project.resolve_dir("a", cwd);
         assert_eq!(
             proj.path,
-            std::path::PathBuf::from("/project/.grok/agent-memory/a")
+            std::path::PathBuf::from("/project/.mlx-agent/agent-memory/a")
         );
         assert!(proj.is_project_scoped);
         let local = MemoryScope::Local.resolve_dir("a", cwd);
         assert_eq!(
             local.path,
-            std::path::PathBuf::from("/project/.grok/agent-memory-local/a")
+            std::path::PathBuf::from("/project/.mlx-agent/agent-memory-local/a")
         );
         assert!(local.is_project_scoped);
+    }
+    #[test]
+    fn memory_prepare_dir_creates_the_agent_folder_and_leaves_git_clean() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(tmp.path()).unwrap();
+        for scope in [MemoryScope::Project, MemoryScope::Local] {
+            let dir = scope.prepare_dir("a", tmp.path());
+            assert!(dir.is_project_scoped);
+            assert!(dir.path.starts_with(tmp.path().join(".mlx-agent")));
+            std::fs::create_dir_all(&dir.path).unwrap();
+            std::fs::write(dir.path.join("MEMORY.md"), "note\n").unwrap();
+        }
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join(".mlx-agent").join(".gitignore")).unwrap(),
+            "*\n"
+        );
+        let mut options = git2::StatusOptions::new();
+        options.include_untracked(true).recurse_untracked_dirs(true);
+        assert!(
+            repo.statuses(Some(&mut options)).unwrap().is_empty(),
+            "the writer leaves git status clean"
+        );
     }
     #[test]
     fn all_new_enum_variants_parse() {
@@ -2301,23 +2338,26 @@ description: Test default tool config
         assert_eq!(def.source_path, Some(file_path));
     }
     #[test]
-    fn test_scope_from_path_detects_bundled_agents() {
+    fn test_scope_from_path_reads_only_the_agent_folder() {
         let tmp = tempfile::tempdir().unwrap();
-        let bundled = tmp
-            .path()
-            .join("nested")
-            .join(".grok")
-            .join("bundled")
-            .join("agents")
-            .join("bundled-agent.md");
-        std::fs::create_dir_all(bundled.parent().unwrap()).unwrap();
-        std::fs::write(
-            &bundled,
-            "---\nname: bundled-agent\ndescription: Bundled agent\n---\n",
-        )
-        .unwrap();
-        let def = AgentDefinition::from_file(&bundled).unwrap();
-        assert_eq!(def.scope, AgentScope::Bundled);
+        let write = |rel: &[&str]| {
+            let mut path = tmp.path().join("nested");
+            for part in rel {
+                path.push(part);
+            }
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "---\nname: scoped\ndescription: Scoped agent\n---\n").unwrap();
+            AgentDefinition::from_file(&path).unwrap().scope
+        };
+        assert_eq!(
+            write(&[".mlx-agent", "agents", "a.md"]),
+            AgentScope::Project
+        );
+        assert_eq!(write(&[".grok", "agents", "b.md"]), AgentScope::BuiltIn);
+        assert_eq!(
+            write(&[".grok", "bundled", "agents", "c.md"]),
+            AgentScope::BuiltIn
+        );
         assert_eq!(AgentScope::Bundled.label(), "bundled");
         assert_eq!(AgentScope::BuiltIn.label(), "built-in");
     }

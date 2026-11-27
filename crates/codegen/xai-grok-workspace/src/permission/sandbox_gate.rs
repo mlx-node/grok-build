@@ -134,9 +134,11 @@ pub(crate) async fn refuse_mode_layer_write(
     let Ok(input) = session.toolset().try_parse(tool_name, &args).await else {
         return Ok(());
     };
-    let layers = sandbox
+    let layers: Vec<PathBuf> = sandbox
         .mode_layers()
-        .map(|layer| write_target(&layer).unwrap_or(layer));
+        .into_iter()
+        .map(|layer| write_target(&layer).unwrap_or(layer))
+        .collect();
     let refused = written_paths(&input, session.cwd()).iter().any(|path| {
         write_target(path)
             .is_none_or(|target| layers.iter().any(|layer| is_same_path(layer, &target)))
@@ -492,7 +494,7 @@ pub(crate) mod text {
     use xai_grok_sandbox::command::violation::InformationalReason;
     /// The way out of a denial no grant can lift — an unproxied connection,
     /// a path the command never named: the same words the informational card shows.
-    pub const RECOVERY_LINE: &str = "Run it in your terminal, or set the folder to `observe` in Settings (`[sandbox] mode = \"observe\"` in `.grok/workspaced.toml`).";
+    pub const RECOVERY_LINE: &str = "Run it in your terminal, or set the folder to `observe` in Settings (`[sandbox] mode = \"observe\"` in `.mlx-agent/workspaced.toml`).";
     /// Asked and denied.
     pub fn kept_blocked(violation: &Violation, followup: Option<&str>) -> String {
         let mut model_text = violation.kept_blocked_text();

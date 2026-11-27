@@ -1586,7 +1586,7 @@ pub(crate) async fn run_shell_child(
         } else if let Some(scope) = agent_memory_scope {
             ctx.memory_config.as_ref().map(|mc| {
                 let mut c = mc.clone();
-                let resolved = scope.resolve_dir(&agent_name_for_memory, &ctx.parent_cwd);
+                let resolved = scope.prepare_dir(&agent_name_for_memory, &ctx.parent_cwd);
                 c.enabled = true;
                 c.root_dir_override = Some(resolved.path);
                 c.flat_memory_root = resolved.is_project_scoped;

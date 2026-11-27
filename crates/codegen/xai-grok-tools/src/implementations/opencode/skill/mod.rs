@@ -36,7 +36,7 @@ ${%- for skill in skills %}
   </skill>
 ${%- endfor %}
 ${%- else %}
-(No skills available. Skills can be added in ~/.grok/skills/ or .grok/skills/)
+(No skills available. Skills can be added in ${{ grok_home }}/skills/ or .mlx-agent/skills/)
 ${%- endif %}
 </available_skills>"#;
 

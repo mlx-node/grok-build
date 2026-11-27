@@ -14,7 +14,7 @@
 //! **On-disk layout** (under the session `cwd`):
 //!
 //! ```text
-//! <cwd>/.grok/rewind-checkpoints/
+//! <cwd>/.mlx-agent/rewind-checkpoints/
 //!   .gitignore                          # "*" — blobs are never committed
 //!   <session_id>/
 //!     checkpoint-<prompt_index>.json    # one RewindCheckpoint per prompt
@@ -28,7 +28,7 @@ use tokio::sync::Mutex;
 
 use crate::session::checkpoint::RewindCheckpoint;
 
-/// Directory (under `<cwd>/.grok`) holding every session's checkpoint store.
+/// Directory (under `<cwd>/.mlx-agent`) holding every session's checkpoint store.
 const STORE_SUBDIR: &str = "rewind-checkpoints";
 
 /// Default cap on retained checkpoints per session.
@@ -38,15 +38,35 @@ const DEFAULT_CHECKPOINT_CAP: usize = 64;
 /// Monotonic counter making each checkpoint temp-file name unique in the process, so concurrent writers for the same `prompt_index` never collide.
 static TMP_WRITE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Where a store writes: its per-session dir and the session folder whose project agent folder holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StoreDir {
+    root: PathBuf,
+    dir: PathBuf,
+}
+
+impl StoreDir {
+    /// `None` when `cwd` has no project agent folder (the home folder); such a store keeps no disk copy.
+    fn for_session(cwd: &Path, session_id: &str) -> Option<Self> {
+        let folder = xai_dirs::project_agent_dir(cwd)?;
+        Some(Self {
+            root: cwd.to_path_buf(),
+            dir: folder
+                .join(STORE_SUBDIR)
+                .join(session_store_dir_name(session_id)),
+        })
+    }
+}
+
 /// Disk-backed, co-located checkpoint store fronted by an in-memory cache.
 ///
 /// See the [module docs](self) for the on-disk layout and durability rationale.
 pub(crate) struct CheckpointStore {
-    /// Per-session store directory: `<cwd>/.grok/rewind-checkpoints/<session_id>`.
-    dir: PathBuf,
+    /// Per-session store directory: `<cwd>/.mlx-agent/rewind-checkpoints/<session_id>`; `None` keeps no disk copy.
+    dir: Option<StoreDir>,
     /// Rewritten store dir after a virtualization remount.
     /// The first bind may construct the store under `/workspace`; a rebind with `session_root` must persist under the real session tree.
-    remounted_dir: std::sync::OnceLock<PathBuf>,
+    remounted_dir: std::sync::OnceLock<Option<StoreDir>>,
     /// Max retained checkpoints; the oldest are evicted beyond this.
     cap: usize,
     /// In-memory cache fronting disk (the hot read path).
@@ -69,15 +89,13 @@ impl CheckpointStore {
     pub(crate) fn with_cap(cwd: &Path, session_id: &str, cap: usize) -> Self {
         // `session_id` is RPC-controlled: never join it verbatim (a `../../etc` would escape the store root)
         // Map it to a safe, collision-free name first
-        let dir = cwd
-            .join(".grok")
-            .join(STORE_SUBDIR)
-            .join(session_store_dir_name(session_id));
+        let dir = StoreDir::for_session(cwd, session_id);
         let cap = cap.max(1);
-        let cache = if super::checkpoint::rewind_durable_enabled() {
-            rehydrate_off_runtime(&dir, cap)
-        } else {
-            BTreeMap::new()
+        let cache = match &dir {
+            Some(store) if super::checkpoint::rewind_durable_enabled() => {
+                rehydrate_off_runtime(&store.dir, cap)
+            }
+            _ => BTreeMap::new(),
         };
         Self {
             dir,
@@ -88,33 +106,33 @@ impl CheckpointStore {
         }
     }
 
-    fn store_dir(&self) -> &Path {
-        self.remounted_dir.get().unwrap_or(&self.dir)
+    fn store_dir(&self) -> Option<&StoreDir> {
+        self.remounted_dir.get().unwrap_or(&self.dir).as_ref()
     }
 
     /// Point subsequent persists at `cwd` after a path-virtualization remount.
     /// Copies already-written blobs so rewind does not orphan state written before the remount.
     /// Blocking `std::fs` runs in `spawn_blocking`; a failed copy leaves `remounted_dir` unset so persist keeps writing the source tree.
     pub(crate) async fn remount(&self, cwd: &Path, session_id: &str) -> bool {
-        let dest = cwd
-            .join(".grok")
-            .join(STORE_SUBDIR)
-            .join(session_store_dir_name(session_id));
+        let dest = StoreDir::for_session(cwd, session_id);
         let _io = self.io_lock.lock().await;
         if let Some(existing) = self.remounted_dir.get() {
-            return existing == dest.as_path();
+            return *existing == dest;
         }
-        let src = self.store_dir().to_path_buf();
-        if src != dest.as_path() && src.exists() {
-            let dest_copy = dest.clone();
+        if let (Some(src), Some(dest)) = (self.store_dir(), dest.as_ref())
+            && src.dir != dest.dir
+            && src.dir.exists()
+        {
+            let src_dir = src.dir.clone();
+            let dest_dir = dest.dir.clone();
             let copy_ok =
-                tokio::task::spawn_blocking(move || copy_checkpoint_blobs(&src, &dest_copy))
+                tokio::task::spawn_blocking(move || copy_checkpoint_blobs(&src_dir, &dest_dir))
                     .await
                     .unwrap_or(false);
             if !copy_ok {
                 tracing::warn!(
-                    src = %self.store_dir().display(),
-                    dest = %dest.display(),
+                    src = %src.dir.display(),
+                    dest = %dest.dir.display(),
                     "rewind checkpoint remount copy failed; keeping source dir"
                 );
                 return false;
@@ -123,16 +141,14 @@ impl CheckpointStore {
         self.remounted_dir.set(dest).is_ok()
     }
 
-    /// On-disk path for a single checkpoint.
-    fn checkpoint_path(&self, prompt_index: usize) -> PathBuf {
-        checkpoint_file_path(self.store_dir(), prompt_index)
-    }
-
     /// Write `checkpoint` through to disk and the cache (last-write-wins per `prompt_index`), then evict the oldest beyond the cap.
     /// Takes the checkpoint by value to avoid cloning its (potentially large) contents on the hot path.
     pub(crate) async fn persist(&self, checkpoint: RewindCheckpoint) {
         // Serialize against `truncate_from` so a finalize and a rewind can't interleave and leave the cache and disk inconsistent
         let _io = self.io_lock.lock().await;
+        let Some(store) = self.store_dir() else {
+            return;
+        };
 
         let prompt_index = checkpoint.prompt_index;
         // Skip a checkpoint below the retention window: it would be evicted the instant it's inserted (write-then-delete)
@@ -150,15 +166,15 @@ impl CheckpointStore {
             }
         }
 
-        if let Err(e) = self.ensure_store_dir().await {
+        if let Err(e) = Self::ensure_store_dir(store).await {
             tracing::warn!(
                 error = %e,
-                dir = %self.store_dir().display(),
+                dir = %store.dir.display(),
                 "rewind checkpoint store: mkdir failed; skipping persist"
             );
             return;
         }
-        if let Err(e) = self.write_checkpoint_file(&checkpoint).await {
+        if let Err(e) = Self::write_checkpoint_file(&store.dir, &checkpoint).await {
             tracing::warn!(
                 error = %e,
                 prompt_index,
@@ -183,7 +199,7 @@ impl CheckpointStore {
             evicted
         };
         for idx in evicted {
-            let _ = tokio::fs::remove_file(self.checkpoint_path(idx)).await;
+            let _ = tokio::fs::remove_file(checkpoint_file_path(&store.dir, idx)).await;
         }
     }
 
@@ -193,10 +209,14 @@ impl CheckpointStore {
     pub(crate) async fn truncate_from(&self, target: usize) {
         // Serialize against `persist` so a rewind and a concurrent finalize can't interleave their cache and disk mutations
         let _io = self.io_lock.lock().await;
+        let Some(store) = self.store_dir() else {
+            self.cache.lock().await.retain(|&idx, _| idx < target);
+            return;
+        };
 
         // Open the disk scan *before* pruning the cache so the two can't diverge
         // If the dir still holds `>= target` blobs but can't be opened, pruning the cache would let a later rehydrate resurrect them
-        let mut entries = match tokio::fs::read_dir(&self.store_dir()).await {
+        let mut entries = match tokio::fs::read_dir(&store.dir).await {
             Ok(entries) => entries,
             // Dir absent, so no on-disk blobs to diverge from; safe to prune the cache
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -208,7 +228,7 @@ impl CheckpointStore {
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    dir = %self.store_dir().display(),
+                    dir = %store.dir.display(),
                     "rewind checkpoint store: truncate scan failed; keeping cache to stay consistent with disk"
                 );
                 return;
@@ -239,7 +259,7 @@ impl CheckpointStore {
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
-                        dir = %self.store_dir().display(),
+                        dir = %store.dir.display(),
                         "rewind checkpoint store: truncate scan read_dir error; \
                          continuing to scan remaining entries"
                     );
@@ -249,11 +269,16 @@ impl CheckpointStore {
         }
     }
 
-    /// Create the store dir and its `.gitignore` (idempotent).
-    /// The `.gitignore` at the `rewind-checkpoints` root uses `*` so no blob is ever committed.
-    async fn ensure_store_dir(&self) -> std::io::Result<()> {
-        tokio::fs::create_dir_all(&self.store_dir()).await?;
-        if let Some(root) = self.store_dir().parent() {
+    /// Create the project agent folder (its `.gitignore` when this creates it), the store dir and the store's `.gitignore` (idempotent).
+    /// The `.gitignore` at the `rewind-checkpoints` root uses `*` so no blob is ever committed, even in an agent folder the user tracks.
+    async fn ensure_store_dir(store: &StoreDir) -> std::io::Result<()> {
+        let root = store.root.clone();
+        tokio::task::spawn_blocking(move || xai_dirs::ensure_project_agent_dir(&root))
+            .await
+            .map_err(std::io::Error::other)??
+            .ok_or_else(|| std::io::Error::other("no project agent folder"))?;
+        tokio::fs::create_dir_all(&store.dir).await?;
+        if let Some(root) = store.dir.parent() {
             let gitignore = root.join(".gitignore");
             // `Path::exists` is a blocking `stat` on the async runtime thread
             // Use the async probe to stay consistent with the surrounding tokio::fs I/O
@@ -267,11 +292,14 @@ impl CheckpointStore {
     /// Serialize `checkpoint` via temp file and rename, so a crash mid-write can't leave a torn JSON blob at the final path.
     /// The temp path carries a per-write unique suffix (pid and counter), not just `prompt_index`.
     /// Two overlapping persists of the same prompt would otherwise share one temp file and tear.
-    async fn write_checkpoint_file(&self, checkpoint: &RewindCheckpoint) -> std::io::Result<()> {
+    async fn write_checkpoint_file(
+        dir: &Path,
+        checkpoint: &RewindCheckpoint,
+    ) -> std::io::Result<()> {
         let json = serde_json::to_vec(checkpoint).map_err(std::io::Error::other)?;
-        let final_path = self.checkpoint_path(checkpoint.prompt_index);
+        let final_path = checkpoint_file_path(dir, checkpoint.prompt_index);
         let unique = TMP_WRITE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let tmp_path = self.store_dir().join(format!(
+        let tmp_path = dir.join(format!(
             "checkpoint-{}.json.tmp.{}.{}",
             checkpoint.prompt_index,
             std::process::id(),
@@ -288,7 +316,7 @@ impl CheckpointStore {
         tokio::fs::rename(&tmp_path, &final_path).await?;
         // Best-effort dir fsync so the rename (the new dir entry) is itself durable; async open keeps this off the blocking path
         // Errors are ignored where unsupported
-        if let Ok(dir) = tokio::fs::File::open(&self.store_dir()).await {
+        if let Ok(dir) = tokio::fs::File::open(dir).await {
             let _ = dir.sync_all().await;
         }
         Ok(())
@@ -462,7 +490,12 @@ fn is_orphan_checkpoint_tmp(file_name: &std::ffi::OsStr) -> bool {
 impl CheckpointStore {
     /// The per-session store directory.
     pub(crate) fn dir(&self) -> &Path {
-        self.store_dir()
+        &self.store_dir().expect("a store in a project folder").dir
+    }
+
+    /// On-disk path for a single checkpoint.
+    fn checkpoint_path(&self, prompt_index: usize) -> PathBuf {
+        checkpoint_file_path(self.dir(), prompt_index)
     }
 
     /// Read a checkpoint, preferring the cache and falling back to a disk read (warming the cache).
@@ -528,11 +561,31 @@ mod tests {
         // ...and a `.gitignore` ignores the whole store so blobs are never committed.
         let gitignore = tmp
             .path()
-            .join(".grok")
+            .join(".mlx-agent")
             .join(STORE_SUBDIR)
             .join(".gitignore");
         let body = std::fs::read_to_string(&gitignore).expect("gitignore written");
         assert_eq!(body.trim(), "*", "store .gitignore must ignore all blobs");
+    }
+
+    #[tokio::test]
+    async fn persist_creates_the_project_agent_folder_and_leaves_git_clean() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(tmp.path()).unwrap();
+        let store = CheckpointStore::new(tmp.path(), "sess-1");
+        store.persist(fs_only_checkpoint(0)).await;
+        assert!(store.checkpoint_path(0).exists(), "checkpoint blob written");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join(".mlx-agent").join(".gitignore")).unwrap(),
+            "*\n",
+            "the folder the store creates is ignored"
+        );
+        let mut options = git2::StatusOptions::new();
+        options.include_untracked(true).recurse_untracked_dirs(true);
+        assert!(
+            repo.statuses(Some(&mut options)).unwrap().is_empty(),
+            "the store leaves git status clean"
+        );
     }
 
     #[tokio::test]
@@ -663,17 +716,17 @@ mod tests {
         }
 
         // Rehydrate with cap 2: only the newest 2 load, older blobs are deleted.
-        let loaded = load_capped_from_disk(&writer.dir, 2);
+        let loaded = load_capped_from_disk(writer.dir(), 2);
         assert_eq!(loaded.len(), 2, "rehydrate keeps only the newest `cap`");
         assert!(loaded.contains_key(&2));
         assert!(loaded.contains_key(&3));
         assert!(
-            !checkpoint_file_path(&writer.dir, 0).exists(),
+            !checkpoint_file_path(writer.dir(), 0).exists(),
             "cap is enforced against on-disk blobs, not just the cache"
         );
-        assert!(!checkpoint_file_path(&writer.dir, 1).exists());
-        assert!(checkpoint_file_path(&writer.dir, 2).exists());
-        assert!(checkpoint_file_path(&writer.dir, 3).exists());
+        assert!(!checkpoint_file_path(writer.dir(), 1).exists());
+        assert!(checkpoint_file_path(writer.dir(), 2).exists());
+        assert!(checkpoint_file_path(writer.dir(), 3).exists());
     }
 
     #[tokio::test]
@@ -683,19 +736,19 @@ mod tests {
         writer.persist(fs_only_checkpoint(0)).await;
 
         // Simulate a crash or failed rename leaving an orphan temp file behind
-        let orphan = writer.dir.join("checkpoint-9.json.tmp.4242.0");
+        let orphan = writer.dir().join("checkpoint-9.json.tmp.4242.0");
         std::fs::write(&orphan, b"partial").unwrap();
         assert!(orphan.exists());
 
         // Rehydrate sweeps the orphan and still loads the real checkpoint.
-        let loaded = load_capped_from_disk(&writer.dir, 100);
+        let loaded = load_capped_from_disk(writer.dir(), 100);
         assert!(loaded.contains_key(&0), "real checkpoint still rehydrates");
         assert!(
             !orphan.exists(),
             "orphaned *.json.tmp* file must be swept on rehydrate"
         );
         // The committed checkpoint blob is untouched by the sweep.
-        assert!(checkpoint_file_path(&writer.dir, 0).exists());
+        assert!(checkpoint_file_path(writer.dir(), 0).exists());
     }
 
     #[test]

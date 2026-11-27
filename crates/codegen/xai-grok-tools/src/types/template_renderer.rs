@@ -67,6 +67,8 @@ struct TemplateContext {
     system_reminders_enabled: bool,
     /// Which file classes `read_file` returns whole; read descriptions only promise it for classes that are on.
     whole_read: WholeReadPolicy,
+    /// The agent home as an absolute path, for texts that name files in it.
+    grok_home: String,
 }
 
 /// Shared render implementation: fast-path check + MiniJinja render.
@@ -260,6 +262,7 @@ impl TemplateRenderer {
                 has_unix_utilities: xai_grok_config::shell::has_unix_utilities(),
                 system_reminders_enabled: true,
                 whole_read: WholeReadPolicy::default(),
+                grok_home: crate::util::grok_home().display().to_string(),
             },
         }
     }
@@ -900,6 +903,22 @@ After.";
             .render_with_extra(template, &serde_json::json!({"flag": false}))
             .unwrap();
         assert_eq!(off, "before FLAG_OFF after");
+    }
+
+    #[test]
+    fn grok_home_renders_as_the_absolute_agent_home() {
+        let r = make_renderer(&[], &[]);
+        let expected = format!("{}/docs/user-guide/", crate::util::grok_home().display());
+        assert!(std::path::Path::new(&expected).is_absolute(), "{expected}");
+        assert_eq!(
+            r.render("${{ grok_home }}/docs/user-guide/").unwrap(),
+            expected
+        );
+        assert_eq!(
+            r.render_with_extra("${{ grok_home }}/docs/user-guide/", &serde_json::json!({}))
+                .unwrap(),
+            expected
+        );
     }
 
     #[test]

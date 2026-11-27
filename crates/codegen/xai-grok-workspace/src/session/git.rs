@@ -2882,7 +2882,7 @@ const DEFAULT_EXCLUDES_MARKER: &str = "grok default excludes";
 /// Lives in `.git/info/exclude`, which never enters the repo's history. `git add -f` still overrides.
 const DEFAULT_EXCLUDES_BLOCK: &str = "\
 # grok default excludes (local-only; seeded by the workspace git_commit op)
-.grok/
+.mlx-agent/
 node_modules/
 .env
 .env.*

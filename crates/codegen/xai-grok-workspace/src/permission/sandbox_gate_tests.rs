@@ -83,7 +83,7 @@ impl Fixture {
         let grok_home = tmp.path().join("grok-home");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::create_dir_all(&grok_home).unwrap();
-        let layer = crate::sandbox_mode::workspace_config_path(&root);
+        let layer = crate::sandbox_mode::workspace_config_path(&root, &grok_home).unwrap();
         std::fs::create_dir_all(layer.parent().unwrap()).unwrap();
         std::fs::write(&layer, "[sandbox]\nmode = \"enforce\"\n").unwrap();
         let sandbox = WorkspaceSandbox::open(WorkspaceSandboxConfig {

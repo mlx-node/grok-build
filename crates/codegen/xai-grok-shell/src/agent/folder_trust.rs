@@ -1,7 +1,7 @@
 //! Folder-trust gate ("do you trust this folder?").
 //!
 //! Repo-local MCP / LSP servers, permission policy, and project instructions/skills are configured by files an attacker can ship inside a cloned repository.
-//! Those files include `.mcp.json`, project `.grok/config.toml` (`[permission]` / `[mcp_servers]` / `[plugins].paths`), `.grok/lsp.json`, `AGENTS.md` / `CLAUDE.md`, and `.grok/skills`.
+//! Those files include `.mcp.json`, project `.mlx-agent/config.toml` (`[permission]` / `[mcp_servers]` / `[plugins].paths`), `.mlx-agent/lsp.json`, `AGENTS.md` / `CLAUDE.md`, and `.mlx-agent/skills`.
 //! `~/.claude.json` `projects.<cwd>` is another such source.
 //! Those configs contain commands, auto-approve rules, or agent instructions the CLI would otherwise honor automatically, a 1-click RCE / policy bypass.
 //! This module resolves a VS-Code-style trust decision ONCE per workspace, BEFORE any repo-local server is spawned.
@@ -111,7 +111,7 @@ pub(crate) fn prompt_warranted(cwd: &Path, remote: Option<&RemoteSettings>) -> b
 
 /// Display-only summary of which repo-local code-exec config kinds are present for `cwd`, for the interactive trust prompt's UI. The kinds are the reasons the folder is gated.
 /// Single-sourced from the SAME scan as the canonical gate ([`xai_grok_workspace::folder_trust::repo_config_kinds`] / [`repo_configs_present`]).
-/// The prompt's reason list therefore cannot drift from what actually gated the folder (same markers, same cwd-to-git-root walk). So an `.grok/lsp.json`-only repo still has a non-empty reason list. Only the post-grant *hot-reload* skips LSP; project LSP applies on the next session open (the backend is spawn-baked into the tool bridge).
+/// The prompt's reason list therefore cannot drift from what actually gated the folder (same markers, same cwd-to-git-root walk). So an `.mlx-agent/lsp.json`-only repo still has a non-empty reason list. Only the post-grant *hot-reload* skips LSP; project LSP applies on the next session open (the backend is spawn-baked into the tool bridge).
 pub(crate) fn detected_config_kinds(cwd: &Path) -> Vec<String> {
     xai_grok_workspace::folder_trust::repo_config_kinds(cwd)
         .into_iter()
@@ -336,13 +336,13 @@ fn is_yes_answer(line: &str) -> bool {
     matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
-/// It MUST enumerate every project MCP source the loaders read. Name-based (not `ConfigSource`-based) ON PURPOSE. Sources: project `.grok/config.toml [mcp_servers]` (NOT the user-tier global config).
+/// It MUST enumerate every project MCP source the loaders read. Name-based (not `ConfigSource`-based) ON PURPOSE. Sources: project `.mlx-agent/config.toml [mcp_servers]` (NOT the user-tier global config).
 /// Also project `.mcp.json` (`cwd` up to the repo root, never `$HOME`), project `.cursor/mcp.json`, and `~/.claude.json projects.<cwd>.mcpServers`.
 /// Edge case: a name declared in BOTH a project config and the global `~/.grok/config.toml` is dropped when untrusted. This is intended — untrusted project content must not influence the command spawned for a shared name.
 pub(crate) fn project_scoped_mcp_names(cwd: &Path) -> HashSet<String> {
     let mut names = HashSet::new();
 
-    // `.grok/config.toml [mcp_servers]` entries tagged project (the loader's key is the display name, matching `mcp_server_name` of the merged server)
+    // `.mlx-agent/config.toml [mcp_servers]` entries tagged project (the loader's key is the display name, matching `mcp_server_name` of the merged server)
     for (name, (_cfg, scope)) in crate::util::config::load_mcp_server_configs_with_project(cwd) {
         if scope == MCP_SCOPE_PROJECT {
             names.insert(name);
@@ -469,7 +469,7 @@ mod tests {
         let _env = EnvGuard::set("GROK_HOME", home.path());
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let tmp = repo_tmp();
-        std::fs::create_dir_all(tmp.path().join(".grok").join("hooks")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent").join("hooks")).unwrap();
         grant_folder_trust(tmp.path());
         let key = workspace_key(tmp.path());
         assert!(
@@ -689,7 +689,7 @@ mod tests {
         let _env = EnvGuard::set("GROK_HOME", home.path());
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let tmp = repo_tmp();
-        let agents = tmp.path().join(".grok").join("agents");
+        let agents = tmp.path().join(".mlx-agent").join("agents");
         std::fs::create_dir_all(&agents).unwrap();
         // Shadows the built-in `explore` subagent and carries a command hook.
         std::fs::write(
@@ -731,14 +731,14 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn project_scope_allowed_denies_untrusted_repo_with_configs() {
-        // Fail-closed (the dangerous case) The setup: a release-stamped build, the feature on by default, an untrusted folder shipping code-exec config (here `.grok/hooks`) With no store grant that must be DENIED
+        // Fail-closed (the dangerous case) The setup: a release-stamped build, the feature on by default, an untrusted folder shipping code-exec config (here `.mlx-agent/hooks`) With no store grant that must be DENIED
         // That holds even though no verdict was recorded first (the gate re-resolves fail-closed rather than defaulting open) GROK_HOME-isolated (empty store); GROK_FOLDER_TRUST unset so the default-on flag applies
         let _sim = simulate_release_build();
         let home = tempfile::tempdir().unwrap();
         let _env = EnvGuard::set("GROK_HOME", home.path());
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let tmp = repo_tmp();
-        std::fs::create_dir_all(tmp.path().join(".grok").join("hooks")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent").join("hooks")).unwrap();
         assert!(
             !project_scope_allowed(tmp.path()),
             "untrusted folder with repo configs must be denied (fail-closed)"
@@ -771,7 +771,7 @@ mod tests {
         let _env = EnvGuard::set("GROK_HOME", home.path());
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let tmp = repo_tmp();
-        std::fs::create_dir_all(tmp.path().join(".grok").join("hooks")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent").join("hooks")).unwrap();
         let mut store = TrustStore::load();
         store.set_trusted(&workspace_key(tmp.path())).unwrap();
         assert!(
@@ -793,7 +793,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let _env = EnvGuard::set("GROK_HOME", home.path());
         let tmp = repo_tmp();
-        std::fs::create_dir_all(tmp.path().join(".grok").join("hooks")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent").join("hooks")).unwrap();
         assert!(
             project_scope_allowed(tmp.path()),
             "inert local/dev build must allow project scope even with configs"
@@ -803,14 +803,15 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn project_scope_allowed_denies_untrusted_plugin_only_repo() {
-        // A plugin-only untrusted repo (just `.grok/plugins/<x>/`, no hooks/MCP/LSP, no store grant) is repo-controlled code-exec It must be DENIED
+        // A plugin-only untrusted repo (just `.mlx-agent/plugins/<x>/`, no hooks/MCP/LSP, no store grant) is repo-controlled code-exec It must be DENIED
         // That is the verdict the shell plugin call sites feed into discover_plugins/build_for_cwd/reload GROK_HOME-isolated (empty store); GROK_FOLDER_TRUST unset so the default-on flag applies
         let _sim = simulate_release_build();
         let home = tempfile::tempdir().unwrap();
         let _env = EnvGuard::set("GROK_HOME", home.path());
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let tmp = repo_tmp();
-        std::fs::create_dir_all(tmp.path().join(".grok").join("plugins").join("evil")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent").join("plugins").join("evil"))
+            .unwrap();
         assert!(
             !project_scope_allowed(tmp.path()),
             "plugin-only untrusted repo must be denied"
@@ -820,7 +821,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn project_scope_allowed_denies_untrusted_permission_only_repo() {
-        // Bridge: a clone whose ONLY repo-local config is `.grok/config.toml` `[permission]` (no MCP/hooks/plugins) must still gate
+        // Bridge: a clone whose ONLY repo-local config is `.mlx-agent/config.toml` `[permission]` (no MCP/hooks/plugins) must still gate
         // It produces untrusted via the real `repo_configs_present` / `decide` / `project_scope_allowed` path Resolver unit tests inject `project_trusted = false` directly and miss this detector gap
         // Subdir launch exercises the cwd-to-git-root walk
         let _sim = simulate_release_build();
@@ -828,7 +829,7 @@ mod tests {
         let _env = EnvGuard::set("GROK_HOME", home.path());
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let tmp = repo_tmp();
-        let grok = tmp.path().join(".grok");
+        let grok = tmp.path().join(".mlx-agent");
         std::fs::create_dir_all(&grok).unwrap();
         std::fs::write(
             grok.join("config.toml"),
@@ -858,7 +859,7 @@ mod tests {
             "workspace-user-only-instructions",
         )
         .unwrap();
-        let skill_dir = workspace_user.join(".grok/skills/workspace-user-only-skill");
+        let skill_dir = workspace_user.join(".mlx-agent/skills/workspace-user-only-skill");
         std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(
             skill_dir.join("SKILL.md"),
@@ -940,7 +941,7 @@ mod tests {
         };
 
         let tmp = repo_tmp();
-        std::fs::create_dir_all(tmp.path().join(".grok").join("hooks")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent").join("hooks")).unwrap();
         assert!(
             resolve_and_record(tmp.path(), Some(&remote), false),
             "kill-switch (feature off) must resolve trusted even with repo configs"
@@ -953,7 +954,7 @@ mod tests {
         // Contrast: a cold `remote = None` gate read (no prior authoritative resolve) misses the kill-switch and denies the same scenario
         // That is the exact gap the up-front spawn resolve closes for chat/load sessions
         let cold = repo_tmp();
-        std::fs::create_dir_all(cold.path().join(".grok").join("hooks")).unwrap();
+        std::fs::create_dir_all(cold.path().join(".mlx-agent").join("hooks")).unwrap();
         assert!(
             !project_scope_allowed(cold.path()),
             "cold remote=None gate read denies a kill-switched folder (regression contrast)"
@@ -975,7 +976,11 @@ mod tests {
         let tmp = repo_tmp();
         // A project plugin
         // Project scope is default-disabled, so name it in the `enabled` list to isolate the TRUST gate (not the enable gate)
-        let plugin = tmp.path().join(".grok").join("plugins").join("trustgate");
+        let plugin = tmp
+            .path()
+            .join(".mlx-agent")
+            .join("plugins")
+            .join("trustgate");
         std::fs::create_dir_all(&plugin).unwrap();
         std::fs::write(plugin.join("plugin.json"), r#"{"name":"trustgate"}"#).unwrap();
         let cfg = DiscoveryConfig {
@@ -1025,7 +1030,7 @@ mod tests {
         let _env = EnvGuard::set("GROK_HOME", home.path());
         let _flag = EnvGuard::unset("GROK_FOLDER_TRUST");
         let tmp = repo_tmp();
-        let hooks_dir = tmp.path().join(".grok").join("hooks");
+        let hooks_dir = tmp.path().join(".mlx-agent").join("hooks");
         std::fs::create_dir_all(&hooks_dir).unwrap();
         // Top-level `{"hooks":{...}}` wrapper; no matcher means match-all
         // The parsed spec name is `<file_stem>:PreToolUse[..]`, so the file stem identifies it
@@ -1126,11 +1131,11 @@ mod tests {
         use xai_grok_tools::implementations::lsp::config::load_servers_with_plugins_sourced;
         use xai_grok_tools::types::config_source::ConfigSource;
 
-        // A `<cwd>/.grok/lsp.json` server must be tagged `Project` so the gate can distinguish it from user/plugin servers
+        // A `<cwd>/.mlx-agent/lsp.json` server must be tagged `Project` so the gate can distinguish it from user/plugin servers
         // Asserts on the specific
-        // key, so any real `~/.grok/lsp.json` on the test host is irrelevant.
+        // key, so any real `~/.mlx-agent/lsp.json` on the test host is irrelevant.
         let tmp = repo_tmp();
-        let grok = tmp.path().join(".grok");
+        let grok = tmp.path().join(".mlx-agent");
         std::fs::create_dir_all(&grok).unwrap();
         std::fs::write(grok.join("lsp.json"), r#"{"projlsp": {"command": "true"}}"#).unwrap();
 
@@ -1147,9 +1152,9 @@ mod tests {
         use xai_grok_tools::implementations::lsp::config::load_servers_with_plugins_sourced;
 
         // End-to-end of the load-site gate (Sites A/B)
-        // A project server loaded from `<cwd>/.grok/lsp.json` is dropped once the workspace is untrusted
+        // A project server loaded from `<cwd>/.mlx-agent/lsp.json` is dropped once the workspace is untrusted
         let tmp = repo_tmp();
-        let grok = tmp.path().join(".grok");
+        let grok = tmp.path().join(".mlx-agent");
         std::fs::create_dir_all(&grok).unwrap();
         std::fs::write(grok.join("lsp.json"), r#"{"projlsp": {"command": "true"}}"#).unwrap();
 
@@ -1174,7 +1179,7 @@ mod tests {
         )
     }
 
-    /// A git-init'd repo declaring two project-scoped MCP servers: `projjson` (`.mcp.json`) and `projtoml` (`.grok/config.toml [mcp_servers]`).
+    /// A git-init'd repo declaring two project-scoped MCP servers: `projjson` (`.mcp.json`) and `projtoml` (`.mlx-agent/config.toml [mcp_servers]`).
     fn repo_with_project_mcp() -> tempfile::TempDir {
         let tmp = repo_tmp();
         std::fs::write(
@@ -1182,7 +1187,7 @@ mod tests {
             r#"{"mcpServers": {"projjson": {"url": "https://proj.example.com/mcp"}}}"#,
         )
         .unwrap();
-        let grok = tmp.path().join(".grok");
+        let grok = tmp.path().join(".mlx-agent");
         std::fs::create_dir_all(&grok).unwrap();
         std::fs::write(
             grok.join("config.toml"),
@@ -1192,13 +1197,13 @@ mod tests {
         tmp
     }
 
-    /// Pins the three known repo-local FILE sources of [`project_scoped_mcp_names`]. A project server declared in each of `.grok/config.toml`, `.mcp.json`, and `.cursor/mcp.json` must appear in the returned set.
+    /// Pins the three known repo-local FILE sources of [`project_scoped_mcp_names`]. A project server declared in each of `.mlx-agent/config.toml`, `.mcp.json`, and `.cursor/mcp.json` must appear in the returned set.
     /// That catches a REGRESSION that drops one of them. It cannot catch a brand-new source TYPE added only to a loader; the single-source-of-truth doc on `project_scoped_mcp_names` is that guard.
     /// `~/.claude.json` is excluded: it lives under `$HOME` and a test must not clobber the real user file; its keys are covered by the shared reader.
     #[test]
     fn project_scoped_mcp_names_cover_every_source() {
         let tmp = repo_tmp();
-        let grok = tmp.path().join(".grok");
+        let grok = tmp.path().join(".mlx-agent");
         std::fs::create_dir_all(&grok).unwrap();
         std::fs::write(
             grok.join("config.toml"),
@@ -1363,7 +1368,7 @@ mod tests {
         );
 
         // A repo-local code-exec config appears after the first resolve.
-        std::fs::create_dir_all(tmp.path().join(".grok").join("hooks")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent").join("hooks")).unwrap();
 
         // The next resolve re-checks `repo_configs_present` (no stale grant to ride)
         // Headless resolves untrusted, so the newly-added hooks are now gated
@@ -1400,14 +1405,14 @@ mod tests {
 
         // (b) Configs present and untrusted (empty store, headless): false
         let untrusted = repo_tmp();
-        std::fs::create_dir_all(untrusted.path().join(".grok").join("hooks")).unwrap();
+        std::fs::create_dir_all(untrusted.path().join(".mlx-agent").join("hooks")).unwrap();
         let lt = resolve_launch_dir_trust(untrusted.path(), None);
         assert_eq!(lt, resolve_and_record(untrusted.path(), None, false));
         assert!(!lt, "untrusted configs launch dir must be denied");
 
         // (c) Configs present and store-trusted: true
         let trusted = repo_tmp();
-        std::fs::create_dir_all(trusted.path().join(".grok").join("hooks")).unwrap();
+        std::fs::create_dir_all(trusted.path().join(".mlx-agent").join("hooks")).unwrap();
         let mut store = TrustStore::load();
         store.set_trusted(&workspace_key(trusted.path())).unwrap();
         let lt = resolve_launch_dir_trust(trusted.path(), None);
@@ -1527,8 +1532,8 @@ mod tests {
     fn detected_config_kinds_summarizes_present_markers() {
         let tmp = repo_tmp();
         std::fs::write(tmp.path().join(".mcp.json"), "{}").unwrap();
-        std::fs::create_dir_all(tmp.path().join(".grok").join("hooks")).unwrap();
-        std::fs::write(tmp.path().join(".grok").join("lsp.json"), "{}").unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent").join("hooks")).unwrap();
+        std::fs::write(tmp.path().join(".mlx-agent").join("lsp.json"), "{}").unwrap();
         std::fs::write(tmp.path().join(".envrc"), "export X=1\n").unwrap();
         let kinds = detected_config_kinds(tmp.path());
         assert!(kinds.contains(&"mcp".to_string()));
@@ -1540,10 +1545,10 @@ mod tests {
 
     #[test]
     fn detected_config_kinds_reports_lsp_only_repo() {
-        // Regression for the "empty configKinds" bug: a repo gated SOLELY by `.grok/lsp.json` must still produce a non-empty reason list
+        // Regression for the "empty configKinds" bug: a repo gated SOLELY by `.mlx-agent/lsp.json` must still produce a non-empty reason list
         let tmp = repo_tmp();
-        std::fs::create_dir_all(tmp.path().join(".grok")).unwrap();
-        std::fs::write(tmp.path().join(".grok").join("lsp.json"), "{}").unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mlx-agent")).unwrap();
+        std::fs::write(tmp.path().join(".mlx-agent").join("lsp.json"), "{}").unwrap();
         let kinds = detected_config_kinds(tmp.path());
         assert_eq!(kinds, vec!["lsp".to_string()]);
     }

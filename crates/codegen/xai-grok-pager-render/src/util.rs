@@ -20,7 +20,7 @@ pub fn pager_toml_path() -> PathBuf {
     grok_home().join("pager.toml")
 }
 
-/// `~/.grok` or `$GROK_HOME`, decided by the resolved home rather than by
+/// `~/.mlx-agent` or `$GROK_HOME`, decided by the resolved home rather than by
 /// whether `GROK_HOME` is set in the environment.
 pub fn display_grok_home_prefix() -> String {
     display_grok_home_prefix_for(&grok_home())
@@ -29,13 +29,13 @@ pub fn display_grok_home_prefix() -> String {
 pub fn display_grok_home_prefix_for(home: &Path) -> String {
     let default = xai_grok_config::default_grok_home();
     if home == default || home == dunce::canonicalize(&default).unwrap_or(default) {
-        "~/.grok".to_string()
+        format!("~/{}", xai_dirs::AGENT_DIR_NAME)
     } else {
         "$GROK_HOME".to_string()
     }
 }
 
-/// User-facing path under [`grok_home()`], e.g. ``~/.grok/config.toml``.
+/// User-facing path under [`grok_home()`], e.g. ``~/.mlx-agent/config.toml``.
 pub fn display_user_grok_path(relative: impl AsRef<Path>) -> String {
     display_user_grok_path_for(&grok_home(), relative)
 }
@@ -396,18 +396,21 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn display_grok_home_prefix_default_install() {
-        if std::env::var("GROK_HOME").is_ok() {
-            return;
-        }
-        assert_eq!(display_grok_home_prefix(), "~/.grok");
+        let default = xai_grok_config::default_grok_home();
+        assert_eq!(display_grok_home_prefix_for(&default), "~/.mlx-agent");
+        assert_eq!(
+            display_user_grok_path_for(&default, "config.toml"),
+            "~/.mlx-agent/config.toml"
+        );
     }
 
     #[test]
     fn display_user_grok_path_joins_relative() {
         let path = display_user_grok_path(xai_grok_config::USER_CONFIG_FILENAME);
         assert!(path.ends_with("/config.toml") || path.ends_with("\\config.toml"));
-        assert!(path.contains(".grok") || path.contains("$GROK_HOME"));
+        assert!(path.contains(".mlx-agent") || path.contains("$GROK_HOME"));
     }
 
     #[test]
@@ -441,6 +444,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn abbreviate_path_collapses_home_with_native_separator() {
         let Some(home) = xai_dirs::home_dir() else {
             return;

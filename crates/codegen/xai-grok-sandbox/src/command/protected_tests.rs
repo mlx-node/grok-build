@@ -60,6 +60,7 @@ fn protected_table_is_pinned() {
     let mut expected: Vec<Protected> = [
         // the workspace's own agent/editor config trees
         "/opt/ws-fixture/ws/.grok",
+        "/opt/ws-fixture/ws/.mlx-agent",
         "/opt/ws-fixture/ws/.cursor",
         "/opt/ws-fixture/ws/.claude",
         "/opt/ws-fixture/ws/.vscode",

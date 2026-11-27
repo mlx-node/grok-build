@@ -407,8 +407,8 @@ mod tests {
         let empty_peer = empty_seed_peer(&result);
         let prompt = ToolOutput::EnterPlanMode(result).to_prompt_format();
         assert!(
-            prompt.contains(".grok/plan.md"),
-            "expected plan path: {prompt}"
+            !prompt.contains(".grok"),
+            "no plan file is set, so no fallback path: {prompt}"
         );
         assert!(prompt.contains("exit_plan_mode"), "{prompt}");
         assert!(prompt.contains("ask_user_question"), "{prompt}");
@@ -447,7 +447,10 @@ mod tests {
             *plan_file_seed,
             PlanFileSeedStatus::Missing(PlanFileSeedFailure::Unavailable)
         );
-        assert_eq!(plan_file_path, ".grok/plan.md");
+        assert!(
+            plan_file_path.is_empty(),
+            "no fallback path: {plan_file_path}"
+        );
         assert_eq!(fs.reads.load(Ordering::SeqCst), 0, "must not probe");
         assert_eq!(fs.writes.load(Ordering::SeqCst), 0, "must not write");
     }
@@ -616,7 +619,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn falls_back_to_cwd_when_no_plan_file_path_resource() {
+    async fn a_cwd_alone_sets_no_plan_file() {
         let mut resources = Resources::new();
         resources.insert(Cwd(PathBuf::from("/workspace/my-project")));
         let shared = resources.into_shared();
@@ -632,7 +635,10 @@ mod tests {
         let EnterPlanModeOutput::Entered {
             ref plan_file_path, ..
         } = result;
-        assert_eq!(plan_file_path, "/workspace/my-project/.grok/plan.md");
+        assert!(
+            plan_file_path.is_empty(),
+            "no fallback path: {plan_file_path}"
+        );
     }
 
     #[tokio::test]

@@ -330,6 +330,33 @@ mod tests {
     // ── Determinism ─────────────────────────────────────────────────
 
     #[test]
+    fn every_template_names_the_agent_folder_and_never_grok_builds() {
+        const AGENT_FOLDER: &str = ".mlx-agent/ in a project is this agent's own folder. Files under .mlx-agent/ \
+             are local to this machine: do not commit them or add them to git unless the user asks.";
+        let renderer = default_renderer();
+        let placeholders = default_placeholders();
+        let base = render_base(&renderer, &placeholders);
+        let user_guide = format!("{}/docs/user-guide/", xai_dirs::grok_home().display());
+        assert!(base.contains(&user_guide), "{user_guide} missing:\n{base}");
+        for (name, prompt) in [
+            ("prompt.md", base),
+            (
+                "subagent_prompt.md",
+                render_subagent(&renderer, &placeholders),
+            ),
+            (
+                "apply_patch_prompt.md",
+                render_apply_patch(&renderer, &placeholders),
+            ),
+        ] {
+            assert!(prompt.contains(AGENT_FOLDER), "{name}:\n{prompt}");
+            for needle in [".grok/", "~/.grok", "`.grok`"] {
+                assert!(!prompt.contains(needle), "{name} has {needle:?}:\n{prompt}");
+            }
+        }
+    }
+
+    #[test]
     fn test_prompt_deterministic_across_renders() {
         let r = default_renderer();
         let p = default_placeholders();

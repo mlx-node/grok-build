@@ -87,12 +87,12 @@ fn user_config_writers_write_through_a_symlink() {
                 "the link target must carry the import marker"
             );
 
-            // A link a repository committed at `.grok/config.toml` is replaced at the link name, never followed.
+            // A link a repository committed at `.mlx-agent/config.toml` is replaced at the link name, never followed.
             let repo = tempfile::tempdir().expect("repo");
             let outside = repo.path().join("outside.toml");
             let defined = "[mcp_servers.planted]\ncommand = \"/bin/echo\"\n";
             std::fs::write(&outside, defined).unwrap();
-            let project_link = repo.path().join(".grok").join("config.toml");
+            let project_link = repo.path().join(".mlx-agent").join("config.toml");
             std::fs::create_dir_all(project_link.parent().unwrap()).unwrap();
             std::os::unix::fs::symlink(&outside, &project_link).unwrap();
             assert!(

@@ -13,6 +13,8 @@
 //! The session config, `grok inspect`, the session picker, and any other process that loads
 //! vendor settings resolve through this module, one cell at a time.
 
+use std::path::{Path, PathBuf};
+
 use serde::{Deserialize, Serialize};
 
 use crate::{ConfigSource, RemoteSettings, Resolved};
@@ -414,10 +416,10 @@ impl CompatConfig {
         }
     }
 
-    /// Config directories that may contain `skills/` subdirectories, in priority order. `.grok` and `.agents` are always included; `.claude` and
-    /// `.cursor` are gated on their respective `skills` cell.
+    /// Vendor config directories that may contain `skills/` subdirectories, in priority order. `.agents` is always included; `.claude` and
+    /// `.cursor` are gated on their respective `skills` cell. A project's own agent folder comes from [`Self::project_skill_roots`].
     pub fn skill_config_dirs(&self) -> Vec<&'static str> {
-        let mut dirs = vec![".grok", ".agents"];
+        let mut dirs = vec![".agents"];
         if self.claude.skills {
             dirs.push(".claude");
         }
@@ -427,10 +429,22 @@ impl CompatConfig {
         dirs
     }
 
-    /// Subdirectories scanned for `*.md` rules files. `.grok/rules` is always included;
-    /// `.claude/rules` and `.cursor/rules` are gated on their respective `rules` cell.
+    /// The skill roots of one project dir in priority order: its agent folder (none in the home folder), then [`Self::skill_config_dirs`].
+    pub fn project_skill_roots(&self, dir: &Path) -> Vec<PathBuf> {
+        xai_dirs::project_agent_dir(dir)
+            .into_iter()
+            .chain(
+                self.skill_config_dirs()
+                    .into_iter()
+                    .map(|name| dir.join(name)),
+            )
+            .collect()
+    }
+
+    /// Vendor subdirectories scanned for `*.md` rules files: `.claude/rules` and `.cursor/rules`, gated on their
+    /// respective `rules` cell. A project's own `rules` folder comes from [`Self::project_rules_dirs`].
     pub fn rules_dirs(&self) -> Vec<&'static str> {
-        let mut dirs = vec![".grok/rules"];
+        let mut dirs = Vec::new();
         if self.claude.rules {
             dirs.push(".claude/rules");
         }
@@ -438,6 +452,15 @@ impl CompatConfig {
             dirs.push(".cursor/rules");
         }
         dirs
+    }
+
+    /// The rules dirs of one project dir in priority order: its agent folder's `rules` (none in the home folder), then [`Self::rules_dirs`].
+    pub fn project_rules_dirs(&self, dir: &Path) -> Vec<PathBuf> {
+        xai_dirs::project_agent_dir(dir)
+            .map(|folder| folder.join("rules"))
+            .into_iter()
+            .chain(self.rules_dirs().into_iter().map(|sub| dir.join(sub)))
+            .collect()
     }
 
     /// Filenames (and relative paths) recognized as project-instruction files. The generic names are always included; the

@@ -121,14 +121,14 @@ fn rematerialize_live(
 fn cwd_with_project_mcp(name: &str, enabled: bool) -> tempfile::TempDir {
     let cwd = tempfile::tempdir().unwrap();
     git2::Repository::init(cwd.path()).unwrap();
-    std::fs::create_dir_all(cwd.path().join(".grok")).unwrap();
+    std::fs::create_dir_all(cwd.path().join(".mlx-agent")).unwrap();
     let enabled_line = if enabled {
         String::new()
     } else {
         "enabled = false\n".to_owned()
     };
     std::fs::write(
-        cwd.path().join(".grok").join("config.toml"),
+        cwd.path().join(".mlx-agent").join("config.toml"),
         format!("[mcp_servers.{name}]\nurl = \"https://toml.example/mcp\"\n{enabled_line}"),
     )
     .unwrap();

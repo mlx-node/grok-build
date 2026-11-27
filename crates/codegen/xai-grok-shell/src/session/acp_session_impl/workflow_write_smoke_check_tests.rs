@@ -42,11 +42,11 @@ fn last_smoke_check_keeps_final_edit_per_path() {
 }
 
 #[test]
-fn path_helper_matches_only_grok_workflow_rhai_files() {
+fn path_helper_matches_only_agent_folder_workflow_rhai_files() {
     for path in [
-        ".grok/workflows/check.rhai",
-        "project/.grok/workflows/check.rhai",
-        r"C:\project\.grok\workflows\check.rhai",
+        ".mlx-agent/workflows/check.rhai",
+        "project/.mlx-agent/workflows/check.rhai",
+        r"C:\project\.mlx-agent\workflows\check.rhai",
     ] {
         let normalized = path.replace('\\', "/");
         assert!(
@@ -56,9 +56,11 @@ fn path_helper_matches_only_grok_workflow_rhai_files() {
     }
 
     for path in [
-        ".grok/check.rhai",
-        ".grok/workflows/check.txt",
-        ".grok/not-workflows/check.rhai",
+        ".grok/workflows/a.rhai",
+        "project/.grok/workflows/check.rhai",
+        ".mlx-agent/check.rhai",
+        ".mlx-agent/workflows/check.txt",
+        ".mlx-agent/not-workflows/check.rhai",
         "workflows/check.rhai",
     ] {
         assert!(!is_project_workflow_rhai_path(Path::new(path)), "{path}");
@@ -68,7 +70,7 @@ fn path_helper_matches_only_grok_workflow_rhai_files() {
 #[tokio::test]
 async fn valid_written_workflow_needs_no_warning() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join(".grok/workflows/valid.rhai");
+    let path = directory.path().join(".mlx-agent/workflows/valid.rhai");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, workflow("valid", "complete(\"ok\");")).unwrap();
     crate::agent::folder_trust::record_for_test(directory.path(), true);
@@ -91,14 +93,14 @@ async fn valid_written_workflow_needs_no_warning() {
 #[tokio::test]
 async fn invalid_authored_workflow_returns_path_specific_warning() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join(".grok/workflows/broken.rhai");
+    let path = directory.path().join(".mlx-agent/workflows/broken.rhai");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, workflow("broken", "unknown_host_function();")).unwrap();
     crate::agent::folder_trust::record_for_test(directory.path(), true);
 
     let snapshot = snapshot_authored_workflow(
         Some(ToolKind::Write),
-        &serde_json::json!({ "file_path": ".grok/workflows/broken.rhai" }),
+        &serde_json::json!({ "file_path": ".mlx-agent/workflows/broken.rhai" }),
         &path_keys(&["file_path"]),
         directory.path(),
         None,
@@ -130,7 +132,7 @@ async fn invalid_authored_workflow_returns_path_specific_warning() {
     assert!(
         snapshot_authored_workflow(
             Some(ToolKind::Edit),
-            &serde_json::json!({ "file_path": ".grok/workflows/broken.rhai" }),
+            &serde_json::json!({ "file_path": ".mlx-agent/workflows/broken.rhai" }),
             &path_keys(&["file_path"]),
             directory.path(),
             None,
@@ -142,7 +144,7 @@ async fn invalid_authored_workflow_returns_path_specific_warning() {
     assert!(
         snapshot_authored_workflow(
             Some(ToolKind::Write),
-            &serde_json::json!({ "path": ".grok/workflows/broken.rhai" }),
+            &serde_json::json!({ "path": ".mlx-agent/workflows/broken.rhai" }),
             &path_keys(&["path"]),
             directory.path(),
             None,
@@ -154,7 +156,7 @@ async fn invalid_authored_workflow_returns_path_specific_warning() {
     assert!(
         snapshot_authored_workflow(
             Some(ToolKind::Edit),
-            &serde_json::json!({ "target_file": ".grok/workflows/broken.rhai" }),
+            &serde_json::json!({ "target_file": ".mlx-agent/workflows/broken.rhai" }),
             &path_keys(&["target_file"]),
             directory.path(),
             None,
@@ -166,7 +168,7 @@ async fn invalid_authored_workflow_returns_path_specific_warning() {
     assert!(
         snapshot_authored_workflow(
             Some(ToolKind::Write),
-            &serde_json::json!({ "src": ".grok/workflows/broken.rhai" }),
+            &serde_json::json!({ "src": ".mlx-agent/workflows/broken.rhai" }),
             &path_keys(&["src"]),
             directory.path(),
             None,
@@ -182,7 +184,9 @@ async fn parse_failure_is_returned_during_snapshot() {
     let directory = tempfile::tempdir().unwrap();
     // Unique workspace_key even when $TMPDIR lives inside a git checkout.
     git2::Repository::init(directory.path()).unwrap();
-    let path = directory.path().join(".grok/workflows/parse-failure.rhai");
+    let path = directory
+        .path()
+        .join(".mlx-agent/workflows/parse-failure.rhai");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, workflow("parse-failure", "let value = ;")).unwrap();
     crate::agent::folder_trust::record_for_test(directory.path(), true);

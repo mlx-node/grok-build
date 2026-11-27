@@ -53,14 +53,18 @@ impl StartupProjectSources {
     }
 }
 
-/// Existing `<dir>/<subdir>` directories under each dir of a precomputed cwd-to-git-root chain ([`RepoDirChain::dirs`]).
-/// Results are in chain order: cwd-first, then each `subdirs` entry in order.
+/// Existing `<dir>/.mlx-agent/<sub>` and `<dir>/<vendor>` directories under each dir of a precomputed cwd-to-git-root chain ([`RepoDirChain::dirs`]).
+/// Results are in chain order: cwd-first, then the agent folder's `sub`, then each `vendor` entry in order.
 /// The project plugin/agent dir walkers share this body so the byte-identical double-loop lives in one place.
-pub(crate) fn existing_subdirs_along(chain_dirs: &[PathBuf], subdirs: &[&str]) -> Vec<PathBuf> {
+pub(crate) fn existing_subdirs_along(
+    chain_dirs: &[PathBuf],
+    sub: &str,
+    vendor: &[&str],
+) -> Vec<PathBuf> {
     let mut found = Vec::new();
     for dir in chain_dirs {
-        for subdir in subdirs {
-            let candidate = dir.join(subdir);
+        let own = xai_dirs::project_agent_dir(dir).map(|folder| folder.join(sub));
+        for candidate in own.into_iter().chain(vendor.iter().map(|v| dir.join(v))) {
             if candidate.is_dir() {
                 found.push(candidate);
             }

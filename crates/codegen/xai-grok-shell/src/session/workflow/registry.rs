@@ -61,6 +61,8 @@ pub(crate) enum ResolveError {
     FilenameMismatch { filename: String, name: String },
     #[error("failed to read {path}: {error}")]
     Io { path: String, error: String },
+    #[error("no project folder in the home folder: {path}")]
+    NoProjectFolder { path: String },
     #[error("invalid workflow script: {0}")]
     Meta(#[from] xai_workflow::MetaError),
 }
@@ -144,8 +146,9 @@ impl WorkflowRegistry {
         let mut dirs = Vec::new();
         if let Some(cwd) = session_cwd
             && crate::agent::folder_trust::project_scope_allowed(cwd)
+            && let Some(folder) = xai_dirs::project_agent_dir(&project_root(cwd))
         {
-            dirs.push((project_root(cwd).join(".grok").join("workflows"), "project"));
+            dirs.push((folder.join("workflows"), "project"));
         }
         dirs.push((user_workflow_dir(), "user"));
 
@@ -547,7 +550,21 @@ pub(crate) fn save_project_workflow(
         path: root.display().to_string(),
         error: error.to_string(),
     })?;
-    let dir = canonical_root.join(".grok").join("workflows");
+    let folder = match xai_dirs::ensure_project_agent_dir(&canonical_root) {
+        Ok(Some(folder)) => folder,
+        Ok(None) => {
+            return Err(ResolveError::NoProjectFolder {
+                path: canonical_root.display().to_string(),
+            });
+        }
+        Err(error) => {
+            return Err(ResolveError::Io {
+                path: canonical_root.display().to_string(),
+                error: error.to_string(),
+            });
+        }
+    };
+    let dir = folder.join("workflows");
     create_contained_workflow_dir(&canonical_root, &dir)?;
     let canonical_dir = dunce::canonicalize(&dir).map_err(|error| ResolveError::Io {
         path: dir.display().to_string(),
@@ -711,11 +728,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         git2::Repository::init(dir.path()).unwrap();
         let cwd = dir.path().join("nested");
-        let wf_dir = dir.path().join(".grok").join("workflows");
+        let wf_dir = dir.path().join(".mlx-agent").join("workflows");
         std::fs::create_dir_all(&cwd).unwrap();
         std::fs::create_dir_all(&wf_dir).unwrap();
         std::fs::write(wf_dir.join("alpha.rhai"), script("alpha")).unwrap();
         std::fs::write(wf_dir.join("wrong.rhai"), script("other")).unwrap();
+        let grok_dir = dir.path().join(".grok").join("workflows");
+        std::fs::create_dir_all(&grok_dir).unwrap();
+        std::fs::write(grok_dir.join("grokmark.rhai"), script("grokmark")).unwrap();
 
         let registry = WorkflowRegistry::scan(Some(&cwd));
         let project_names: Vec<_> = registry
@@ -724,7 +744,7 @@ mod tests {
             .filter(|entry| entry.source == "project")
             .map(|entry| entry.name)
             .collect();
-        assert_eq!(project_names, ["alpha"]);
+        assert_eq!(project_names, ["alpha"], "a .grok workflow is never read");
         assert_eq!(
             registry.resolve_by_name("alpha").unwrap().meta.name,
             "alpha"
@@ -756,7 +776,7 @@ mod tests {
     fn project_workflows_follow_folder_trust() {
         let dir = tempfile::tempdir().unwrap();
         git2::Repository::init(dir.path()).unwrap();
-        let workflows = dir.path().join(".grok/workflows");
+        let workflows = dir.path().join(".mlx-agent/workflows");
         std::fs::create_dir_all(&workflows).unwrap();
         std::fs::write(workflows.join("project-only.rhai"), script("project-only")).unwrap();
 
@@ -1025,7 +1045,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("project");
-        let workflows = project.join(".grok/workflows");
+        let workflows = project.join(".mlx-agent/workflows");
         let target = dir.path().join("linked.rhai");
         std::fs::create_dir_all(&workflows).unwrap();
         std::fs::write(&target, script("linked")).unwrap();
@@ -1041,6 +1061,26 @@ mod tests {
             resolve_by_path(&workflows.join("linked.rhai"), &project, None),
             Err(ResolveError::UntrustedPath { .. })
         ));
+    }
+
+    #[test]
+    fn save_creates_the_agent_folder_and_leaves_git_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        crate::agent::folder_trust::record_for_test(dir.path(), true);
+        let path = save_project_workflow(dir.path(), "saved", &script("saved")).unwrap();
+        let folder = dunce::canonicalize(dir.path()).unwrap().join(".mlx-agent");
+        assert_eq!(path, folder.join("workflows").join("saved.rhai"));
+        assert_eq!(
+            std::fs::read_to_string(folder.join(".gitignore")).unwrap(),
+            "*\n"
+        );
+        let mut options = git2::StatusOptions::new();
+        options.include_untracked(true).recurse_untracked_dirs(true);
+        assert!(
+            repo.statuses(Some(&mut options)).unwrap().is_empty(),
+            "the writer leaves git status clean"
+        );
     }
 
     #[test]
@@ -1073,7 +1113,7 @@ mod tests {
             dunce::canonicalize(path).unwrap(),
             dunce::canonicalize(&project)
                 .unwrap()
-                .join(".grok/workflows/safe.rhai")
+                .join(".mlx-agent/workflows/safe.rhai")
         );
     }
 
@@ -1085,9 +1125,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("project");
         let attacker = dir.path().join("attacker");
-        std::fs::create_dir_all(project.join(".grok")).unwrap();
+        std::fs::create_dir_all(project.join(".mlx-agent")).unwrap();
         std::fs::create_dir_all(&attacker).unwrap();
-        symlink(&attacker, project.join(".grok/workflows")).unwrap();
+        symlink(&attacker, project.join(".mlx-agent/workflows")).unwrap();
 
         assert!(matches!(
             save_project_workflow(&project, "safe", &script("safe")),

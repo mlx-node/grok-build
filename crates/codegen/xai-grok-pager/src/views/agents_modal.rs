@@ -126,7 +126,7 @@ pub enum AgentsModalOutcome {
         tab: AgentsTab,
     },
 }
-/// User-level vs project-level config files (`~/.grok` vs `{cwd}/.grok`).
+/// User-level vs project-level config files (`~/.grok` vs `{cwd}/.mlx-agent`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ConfigFileScope {
     #[default]
@@ -492,7 +492,7 @@ fn personas_from_bundle(bundle: &BundleState) -> Vec<PersonaDetail> {
             .collect()
     }
 }
-/// Union bundled personas with local `~/.grok/personas` and `{cwd}/.grok/personas`.
+/// Union bundled personas with local `~/.grok/personas` and `{cwd}/.mlx-agent/personas`.
 ///
 /// Bundled names take precedence; local-only names are appended with scope tags.
 pub fn merge_persona_lists(bundle: &BundleState, cwd: &Path) -> Vec<PersonaDetail> {
@@ -512,11 +512,10 @@ pub fn merge_persona_lists(bundle: &BundleState, cwd: &Path) -> Vec<PersonaDetai
             }
         }
     }
-    let dirs = [
-        (ConfigFileScope::Project, cwd.join(".grok").join("personas")),
-        (ConfigFileScope::User, grok_home.join("personas")),
-    ];
-    for (scope, dir) in dirs {
+    let project = xai_dirs::project_agent_dir(cwd)
+        .map(|folder| (ConfigFileScope::Project, folder.join("personas")));
+    let user = (ConfigFileScope::User, grok_home.join("personas"));
+    for (scope, dir) in project.into_iter().chain(std::iter::once(user)) {
         append_local_personas_in_dir(&dir, scope, &mut list, &mut names);
     }
     list
@@ -624,10 +623,12 @@ pub fn sanitize_config_name(name: &str) -> Result<String, String> {
     }
     Ok(sanitized)
 }
-fn personas_dir_for_scope(scope: ConfigFileScope, cwd: &Path) -> PathBuf {
+fn personas_dir_for_scope(scope: ConfigFileScope, cwd: &Path) -> Result<PathBuf, String> {
     match scope {
-        ConfigFileScope::User => xai_grok_config::grok_home().join("personas"),
-        ConfigFileScope::Project => cwd.join(".grok").join("personas"),
+        ConfigFileScope::User => Ok(xai_grok_config::grok_home().join("personas")),
+        ConfigFileScope::Project => xai_dirs::project_agent_dir(cwd)
+            .map(|folder| folder.join("personas"))
+            .ok_or_else(|| "No project folder in the home folder".to_string()),
     }
 }
 #[derive(serde::Serialize)]
@@ -646,7 +647,11 @@ pub fn create_persona_template(
     cwd: &Path,
 ) -> Result<PathBuf, String> {
     let sanitized = sanitize_config_name(name)?;
-    let personas_dir = personas_dir_for_scope(scope, cwd);
+    if matches!(scope, ConfigFileScope::Project) {
+        xai_dirs::ensure_project_agent_dir(cwd)
+            .map_err(|e| format!("Failed to create the project folder: {e}"))?;
+    }
+    let personas_dir = personas_dir_for_scope(scope, cwd)?;
     if let Err(e) = std::fs::create_dir_all(&personas_dir) {
         return Err(format!("Failed to create personas directory: {e}"));
     }
@@ -665,11 +670,11 @@ pub fn create_persona_template(
     std::fs::write(&path, content).map_err(|e| format!("Failed to write persona file: {e}"))?;
     Ok(path)
 }
-/// True when `path` is a deletable local persona file (user or project `.grok/personas`).
+/// True when `path` is a deletable local persona file (user or project `.mlx-agent/personas`).
 pub fn persona_path_is_deletable(path: &Path) -> bool {
     config_path_is_user_or_project(path, "personas")
 }
-/// Shared guard: canonical path under `~/.grok/{subdir}` or `{cwd}/.grok/{subdir}`, not bundled.
+/// Shared guard: canonical path under the agent home's `{subdir}` or `{cwd}/.mlx-agent/{subdir}`, not bundled.
 fn config_path_is_user_or_project(path: &Path, subdir: &str) -> bool {
     let Ok(canonical) = dunce::canonicalize(path) else {
         return false;
@@ -684,10 +689,12 @@ fn config_path_is_user_or_project(path: &Path, subdir: &str) -> bool {
     let in_user = dunce::canonicalize(grok_home.join(subdir))
         .ok()
         .is_some_and(|d| canonical.starts_with(&d));
-    let project_suffix = std::path::Path::new(".grok").join(subdir);
-    let in_project = canonical
-        .ancestors()
-        .any(|a| a.ends_with(project_suffix.as_path()));
+    let in_project = canonical.ancestors().any(|a| {
+        a.file_name().is_some_and(|name| name == subdir)
+            && a.parent()
+                .and_then(Path::file_name)
+                .is_some_and(xai_dirs::is_agent_dir_name)
+    });
     in_user || in_project
 }
 /// Whether the persona can be edited on disk from the modal (local user/project only).
@@ -2617,7 +2624,7 @@ mod tests {
     #[test]
     fn merge_persona_lists_appends_local_only() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let personas_dir = dir.path().join(".grok").join("personas");
+        let personas_dir = dir.path().join(".mlx-agent").join("personas");
         std::fs::create_dir_all(&personas_dir).expect("mkdir");
         std::fs::write(
             personas_dir.join("local-only.toml"),
@@ -2643,6 +2650,31 @@ mod tests {
         assert_eq!(local.name, "local-only");
         assert_eq!(local.scope_label.as_deref(), Some("project"));
         assert!(local.source_path.is_some());
+    }
+    #[test]
+    fn project_persona_creates_the_agent_folder_and_leaves_git_clean() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let path = create_persona_template(
+            "helper",
+            "helps",
+            "always be helpful",
+            ConfigFileScope::Project,
+            dir.path(),
+        )
+        .expect("create");
+        let folder = dir.path().join(".mlx-agent");
+        assert_eq!(path, folder.join("personas").join("helper.toml"));
+        assert_eq!(
+            std::fs::read_to_string(folder.join(".gitignore")).unwrap(),
+            "*\n"
+        );
+        let mut options = git2::StatusOptions::new();
+        options.include_untracked(true).recurse_untracked_dirs(true);
+        assert!(
+            repo.statuses(Some(&mut options)).unwrap().is_empty(),
+            "the writer leaves git status clean"
+        );
     }
     #[test]
     fn create_persona_template_project_scope_writes_toml() {
@@ -2684,7 +2716,11 @@ mod tests {
     #[test]
     fn persona_is_deletable_local_vs_bundled() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let local = dir.path().join(".grok").join("personas").join("p.toml");
+        let local = dir
+            .path()
+            .join(".mlx-agent")
+            .join("personas")
+            .join("p.toml");
         std::fs::create_dir_all(local.parent().unwrap()).unwrap();
         std::fs::write(&local, "instructions = \"x\"\n").unwrap();
         let local_detail = PersonaDetail {
@@ -2701,7 +2737,7 @@ mod tests {
             description: None,
             has_inputs: false,
             has_outputs: false,
-            source_path: Some("/home/user/.grok/bundled/personas/b.toml".into()),
+            source_path: Some("/home/user/.mlx-agent/bundled/personas/b.toml".into()),
             scope_label: None,
         };
         assert!(!persona_is_deletable(&bundled_detail));
@@ -2716,7 +2752,11 @@ mod tests {
     #[test]
     fn delete_persona_file_allows_project_persona() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join(".grok").join("personas").join("gone.toml");
+        let path = dir
+            .path()
+            .join(".mlx-agent")
+            .join("personas")
+            .join("gone.toml");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "instructions = \"bye\"\n").unwrap();
         delete_persona_file(&path).expect("delete");
@@ -3226,7 +3266,7 @@ mod tests {
         );
         let path = directory
             .path()
-            .join(".grok")
+            .join(".mlx-agent")
             .join("personas")
             .join("my-persona.toml");
         let content = std::fs::read_to_string(&path).unwrap();

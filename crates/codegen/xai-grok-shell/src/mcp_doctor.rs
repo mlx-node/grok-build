@@ -163,17 +163,18 @@ fn discover_servers(cwd: &Path) -> (Vec<ConfigSourceStatus>, Vec<DiscoveredServe
     }
 
     let mut sources = Vec::new();
+    let user_config_label = format!("{}/config.toml", xai_dirs::display_grok_home());
 
     if user_config.is_file() {
         sources.push(ConfigSourceStatus {
-            path: "~/.grok/config.toml".to_string(),
+            path: user_config_label,
             status: ConfigSourceState::Found {
                 server_count: toml_counts.get(&user_config).copied().unwrap_or(0),
             },
         });
     } else {
         sources.push(ConfigSourceStatus {
-            path: "~/.grok/config.toml".to_string(),
+            path: user_config_label,
             status: ConfigSourceState::NotFound,
         });
     }
@@ -627,7 +628,7 @@ pub fn policy_enable_refusal(cwd: &Path, name: &str) -> Option<String> {
 pub enum McpWriteScope {
     /// `~/.grok/config.toml`.
     User,
-    /// `./.grok/config.toml`.
+    /// `./.mlx-agent/config.toml`.
     Project,
 }
 
@@ -971,9 +972,9 @@ mod tests {
         crate::claude_import::refresh_marker_cache(false);
         let repo = tempfile::tempdir().unwrap();
         git2::Repository::init(repo.path()).unwrap();
-        std::fs::create_dir_all(repo.path().join(".grok")).unwrap();
+        std::fs::create_dir_all(repo.path().join(".mlx-agent")).unwrap();
         std::fs::write(
-            repo.path().join(".grok/config.toml"),
+            repo.path().join(".mlx-agent/config.toml"),
             "[mcp_servers.corp]\nurl = \"https://corp.example/mcp\"\n",
         )
         .unwrap();

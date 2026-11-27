@@ -229,7 +229,7 @@ pub(crate) fn resolve_max_mcp_output_bytes(remote: Option<u64>) -> usize {
     )
 }
 
-/// Project tier of the MCP output cap: `[mcp] max_output_bytes` from the `.grok/config.toml` chain (`cwd` up to the git root), deepest file wins.
+/// Project tier of the MCP output cap: `[mcp] max_output_bytes` from the `.mlx-agent/config.toml` chain (`cwd` up to the git root), deepest file wins.
 /// Folder-trust-gated: an untrusted checkout must not raise or lower the cap (raising it would let the repo stuff context and drive up cost).
 /// Project plugin paths and repo env contributions are gated the same way.
 fn project_max_mcp_output_bytes(cwd: &std::path::Path) -> Option<usize> {
@@ -320,10 +320,10 @@ mod max_mcp_output_bytes_tests {
         // Make it a git repo so the chain walks from the subdir to the root
         git2::Repository::init(root).unwrap();
         let sub = root.join("crates").join("thing");
-        std::fs::create_dir_all(sub.join(".grok")).unwrap();
-        std::fs::create_dir_all(root.join(".grok")).unwrap();
+        std::fs::create_dir_all(sub.join(".mlx-agent")).unwrap();
+        std::fs::create_dir_all(root.join(".mlx-agent")).unwrap();
         std::fs::write(
-            root.join(".grok/config.toml"),
+            root.join(".mlx-agent/config.toml"),
             "[mcp]\nmax_output_bytes = 30000\n",
         )
         .unwrap();
@@ -333,18 +333,22 @@ mod max_mcp_output_bytes_tests {
 
         // The subdir sets it too, so the deeper file wins
         std::fs::write(
-            sub.join(".grok/config.toml"),
+            sub.join(".mlx-agent/config.toml"),
             "[mcp]\nmax_output_bytes = 50000\n",
         )
         .unwrap();
         assert_eq!(super::project_max_mcp_output_bytes(&sub), Some(50_000));
 
         // A deeper file *without* the key does not mask the root value.
-        std::fs::write(sub.join(".grok/config.toml"), "[ui]\nvim_mode = true\n").unwrap();
+        std::fs::write(
+            sub.join(".mlx-agent/config.toml"),
+            "[ui]\nvim_mode = true\n",
+        )
+        .unwrap();
         assert_eq!(super::project_max_mcp_output_bytes(&sub), Some(30_000));
 
-        // No .grok file sets the key anywhere, so the walk returns None
-        std::fs::remove_file(root.join(".grok/config.toml")).unwrap();
+        // No .mlx-agent file sets the key anywhere, so the walk returns None
+        std::fs::remove_file(root.join(".mlx-agent/config.toml")).unwrap();
         assert_eq!(super::project_max_mcp_output_bytes(&sub), None);
     }
 }

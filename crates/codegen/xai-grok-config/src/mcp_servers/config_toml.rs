@@ -156,7 +156,7 @@ fn toml_mcp_server_configs_from(
                 tracing::debug!(
                     count = project_servers.len(),
                     path = %config_path.display(),
-                    "Loaded project-scoped MCP servers from .grok/config.toml"
+                    "Loaded project-scoped MCP servers from .mlx-agent/config.toml"
                 );
                 for (name, config) in project_servers {
                     servers.insert(name, (config, MCP_SCOPE_PROJECT));
@@ -229,7 +229,8 @@ fn parse_mcp_servers_with_problems(root: &toml::Value) -> ParsedMcpServers {
                         severity: McpServerProblemSeverity::Warning,
                         message: format!(
                             "`mcp_servers.{name}` has an unrecognized field `{field}`; it is \
-                             ignored. See ~/.grok/docs/user-guide/07-mcp-servers.md"
+                             ignored. See {}/docs/user-guide/07-mcp-servers.md",
+                            xai_dirs::display_grok_home()
                         ),
                     });
                 }
@@ -269,12 +270,14 @@ fn diagnose_invalid_entry(name: &str, value: &toml::Value, error: &str) -> McpSe
             "`mcp_servers.{name}` has no transport. To run it, set `command = \"...\"` or \
              `url = \"...\"`. To turn it off, add \"{name}\" to `disabled_mcp_servers` instead of \
              leaving an entry with no transport. \
-             See ~/.grok/docs/user-guide/07-mcp-servers.md"
+             See {}/docs/user-guide/07-mcp-servers.md",
+            xai_dirs::display_grok_home()
         )
     } else {
         format!(
             "`mcp_servers.{name}` has an invalid transport: {error}. \
-             See ~/.grok/docs/user-guide/07-mcp-servers.md"
+             See {}/docs/user-guide/07-mcp-servers.md",
+            xai_dirs::display_grok_home()
         )
     };
     McpServerConfigProblem {
@@ -296,7 +299,8 @@ fn blank_transport_problem(name: &str, config: &McpServerConfig) -> Option<McpSe
             message: format!(
                 "`mcp_servers.{name}` is enabled but its `{field}` is blank. \
                  Set a value, or add \"{name}\" to `disabled_mcp_servers` to turn it \
-                 off. See ~/.grok/docs/user-guide/07-mcp-servers.md"
+                 off. See {}/docs/user-guide/07-mcp-servers.md",
+                xai_dirs::display_grok_home()
             ),
         })
     } else {
