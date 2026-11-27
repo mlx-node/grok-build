@@ -1,6 +1,8 @@
 //! Regression: settings saves must serialize against config-init-flock writers, or the two
 //! domains interleave read-modify-writes and the last atomic rename drops the other side's edit.
 
+#![cfg(any(target_os = "linux", target_os = "macos"))]
+
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
