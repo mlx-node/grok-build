@@ -477,8 +477,8 @@ fn project_agent_refresh_dirs(project_agent_dir: &Path) -> Vec<(PathBuf, Recursi
     dirs
 }
 
-fn attach_new_refresh_dirs(
-    debouncer: &mut Debouncer<AccessFilteredWatcher>,
+fn attach_new_refresh_dirs<W: Watcher>(
+    debouncer: &mut Debouncer<W>,
     refresh_dirs: &[(PathBuf, RecursiveMode)],
     refreshed_dirs: &mut HashSet<PathBuf>,
     err_msg: &str,
@@ -586,17 +586,31 @@ fn plan_skills_watch_targets(
 
 /// Watches project `.mlx-agent` skills/commands/workflows for mid-session discovery.
 ///
-/// After a [`DiscoveryChange`], call [`Self::refresh_new_dirs`] so newly created seed dirs get watches attached.
+/// On macOS each OS watch start, re-arm and stop waits on a reply from fseventsd, which takes seconds under load,
+/// so they all run on the watcher's own thread: on a session thread they stall its loop and its exit.
+/// Dropping this stops the watch; the change channel closes once that thread is done.
 pub(crate) struct ProjectDiscoveryWatcher {
-    debouncer: Debouncer<AccessFilteredWatcher>,
-    refresh_dirs: Vec<(PathBuf, RecursiveMode)>,
-    refreshed_dirs: HashSet<PathBuf>,
+    commands: std::sync::mpsc::Sender<DiscoveryCommand>,
+}
+
+enum DiscoveryCommand {
+    Changed(DiscoveryChange),
+    Stop,
+}
+
+impl Drop for ProjectDiscoveryWatcher {
+    fn drop(&mut self) {
+        let _ = self.commands.send(DiscoveryCommand::Stop);
+    }
 }
 
 impl ProjectDiscoveryWatcher {
+    /// With `reconcile_once_armed`, one [`DiscoveryChange::Skills`] follows the arm: the session runs while the
+    /// OS watch arms, and a file written before the watch is armed sends no event.
     pub(crate) fn start(
         cwd: &Path,
         grok_home: &Path,
+        reconcile_once_armed: bool,
     ) -> Option<(Self, mpsc::UnboundedReceiver<DiscoveryChange>)> {
         let project_root = crate::session::workflow::registry::project_root(cwd);
         // No project folder in the home folder or when it is the agent home: the agent home's root
@@ -612,34 +626,86 @@ impl ProjectDiscoveryWatcher {
             );
             return None;
         };
-        let (tx, rx) = mpsc::unbounded_channel();
-        let project_grok_for_events = project_grok.clone();
-        let mut debouncer =
-            new_filtered_debouncer(SKILLS_DEBOUNCE, move |res: DebounceEventResult| {
-                let Ok(events) = res else { return };
-                let mut change = None;
-                for next in events
-                    .iter()
-                    .filter(|event| event.path.starts_with(&project_grok_for_events))
-                    .filter_map(|event| discovery_change_for_path(&event.path))
-                {
-                    if next == DiscoveryChange::Skills {
-                        change = Some(next);
-                        break;
-                    }
-                    change = Some(next);
+        Self::spawn::<AccessFilteredWatcher>(project_root, project_grok, reconcile_once_armed)
+    }
+
+    fn spawn<W: Watcher + 'static>(
+        project_root: PathBuf,
+        project_grok: PathBuf,
+        reconcile_once_armed: bool,
+    ) -> Option<(Self, mpsc::UnboundedReceiver<DiscoveryChange>)> {
+        let (changes_tx, changes_rx) = mpsc::unbounded_channel();
+        let (commands, inbox) = std::sync::mpsc::channel();
+        let changed = commands.clone();
+        std::thread::Builder::new()
+            .name("project-discovery-watch".into())
+            .spawn(move || {
+                let Some(mut watches) =
+                    DiscoveryWatches::<W>::arm(&project_root, &project_grok, changed)
+                else {
+                    return;
+                };
+                if reconcile_once_armed && changes_tx.send(DiscoveryChange::Skills).is_err() {
+                    return;
                 }
-                if let Some(change) = change {
-                    let _ = tx.send(change);
+                for command in inbox {
+                    match command {
+                        DiscoveryCommand::Changed(change) => {
+                            watches.refresh_new_dirs();
+                            if changes_tx.send(change).is_err() {
+                                break;
+                            }
+                        }
+                        DiscoveryCommand::Stop => break,
+                    }
                 }
             })
-            .map_err(|error| tracing::warn!(%error, "failed to create project workflow watcher"))
+            .map_err(|error| tracing::warn!(%error, "failed to start project workflow watcher"))
             .ok()?;
+        Some((Self { commands }, changes_rx))
+    }
+}
+
+/// The OS watches behind a [`ProjectDiscoveryWatcher`], made, re-armed and dropped on its thread.
+struct DiscoveryWatches<W: Watcher> {
+    debouncer: Debouncer<W>,
+    refresh_dirs: Vec<(PathBuf, RecursiveMode)>,
+    refreshed_dirs: HashSet<PathBuf>,
+}
+
+impl<W: Watcher> DiscoveryWatches<W> {
+    fn arm(
+        project_root: &Path,
+        project_grok: &Path,
+        changed: std::sync::mpsc::Sender<DiscoveryCommand>,
+    ) -> Option<Self> {
+        let project_grok_for_events = project_grok.to_path_buf();
+        let config = notify_debouncer_mini::Config::default().with_timeout(SKILLS_DEBOUNCE);
+        let mut debouncer = new_debouncer_opt::<_, W>(config, move |res: DebounceEventResult| {
+            let Ok(events) = res else { return };
+            let mut change = None;
+            for next in events
+                .iter()
+                .filter(|event| event.path.starts_with(&project_grok_for_events))
+                .filter_map(|event| discovery_change_for_path(&event.path))
+            {
+                if next == DiscoveryChange::Skills {
+                    change = Some(next);
+                    break;
+                }
+                change = Some(next);
+            }
+            if let Some(change) = change {
+                let _ = changed.send(DiscoveryCommand::Changed(change));
+            }
+        })
+        .map_err(|error| tracing::warn!(%error, "failed to create project workflow watcher"))
+        .ok()?;
 
         let initial = if project_grok.is_dir() {
-            project_grok.clone()
+            project_grok.to_path_buf()
         } else {
-            project_root.clone()
+            project_root.to_path_buf()
         };
         if let Err(error) = debouncer
             .watcher()
@@ -648,7 +714,7 @@ impl ProjectDiscoveryWatcher {
             log_watch_error(&error, "failed to watch project workflow parent");
             return None;
         }
-        let refresh_dirs = project_agent_refresh_dirs(&project_grok);
+        let refresh_dirs = project_agent_refresh_dirs(project_grok);
         let mut refreshed_dirs = HashSet::from([initial]);
         attach_new_refresh_dirs(
             &mut debouncer,
@@ -656,18 +722,15 @@ impl ProjectDiscoveryWatcher {
             &mut refreshed_dirs,
             "failed to watch project discovery dir",
         );
-        Some((
-            Self {
-                debouncer,
-                refresh_dirs,
-                refreshed_dirs,
-            },
-            rx,
-        ))
+        Some(Self {
+            debouncer,
+            refresh_dirs,
+            refreshed_dirs,
+        })
     }
 
     /// Attach watches for seed dirs that now exist (call after a discovery event).
-    pub(crate) fn refresh_new_dirs(&mut self) {
+    fn refresh_new_dirs(&mut self) {
         attach_new_refresh_dirs(
             &mut self.debouncer,
             &self.refresh_dirs,
@@ -1397,8 +1460,179 @@ mod tests {
         let cwd = project.join("sub");
         fs::create_dir(&cwd).unwrap();
 
-        assert!(ProjectDiscoveryWatcher::start(&cwd, &project_grok).is_none());
-        assert!(ProjectDiscoveryWatcher::start(&cwd, &project.join("other-home")).is_some());
+        assert!(ProjectDiscoveryWatcher::start(&cwd, &project_grok, false).is_none());
+        assert!(ProjectDiscoveryWatcher::start(&cwd, &project.join("other-home"), false).is_some());
+    }
+
+    struct Gate {
+        open: bool,
+        watching: bool,
+        dropped: bool,
+    }
+
+    static GATE: std::sync::Mutex<Gate> = std::sync::Mutex::new(Gate {
+        open: false,
+        watching: false,
+        dropped: false,
+    });
+    static GATE_CHANGED: std::sync::Condvar = std::sync::Condvar::new();
+    static GATE_OWNER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn gate() -> std::sync::MutexGuard<'static, Gate> {
+        GATE.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The gate is process-wide: one test at a time owns it, from a closed gate.
+    fn own_gate() -> std::sync::MutexGuard<'static, ()> {
+        let owner = GATE_OWNER
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *gate() = Gate {
+            open: false,
+            watching: false,
+            dropped: false,
+        };
+        owner
+    }
+
+    fn wait_for_gate(what: &str, done: impl Fn(&Gate) -> bool) {
+        let timed_out = GATE_CHANGED
+            .wait_timeout_while(gate(), Duration::from_secs(30), |gate| !done(gate))
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .1
+            .timed_out();
+        assert!(!timed_out, "{what}");
+    }
+
+    /// An OS watch whose `watch` parks until the gate opens, as FSEvents does while fseventsd is slow.
+    struct GatedWatcher;
+
+    impl Watcher for GatedWatcher {
+        fn new<F: notify::EventHandler>(_: F, _: notify::Config) -> notify::Result<Self> {
+            Ok(Self)
+        }
+
+        fn watch(&mut self, _: &Path, _: RecursiveMode) -> notify::Result<()> {
+            let mut gate = gate();
+            gate.watching = true;
+            GATE_CHANGED.notify_all();
+            while !gate.open {
+                gate = GATE_CHANGED
+                    .wait(gate)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+            Ok(())
+        }
+
+        fn unwatch(&mut self, _: &Path) -> notify::Result<()> {
+            Ok(())
+        }
+
+        fn kind() -> notify::WatcherKind {
+            notify::WatcherKind::NullWatcher
+        }
+    }
+
+    impl Drop for GatedWatcher {
+        fn drop(&mut self) {
+            gate().dropped = true;
+            GATE_CHANGED.notify_all();
+        }
+    }
+
+    struct OpenGate;
+
+    impl Drop for OpenGate {
+        fn drop(&mut self) {
+            gate().open = true;
+            GATE_CHANGED.notify_all();
+        }
+    }
+
+    #[test]
+    fn project_discovery_watcher_never_waits_on_the_os_watch() {
+        let _owner = own_gate();
+        let open_gate = OpenGate;
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().to_path_buf();
+        let project_grok = project.join(xai_dirs::AGENT_DIR_NAME);
+        fs::create_dir(&project_grok).unwrap();
+        let (owner_tx, owner_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let watcher =
+                ProjectDiscoveryWatcher::spawn::<GatedWatcher>(project, project_grok, true);
+            let _ = owner_tx.send(watcher.is_some());
+            drop(watcher);
+            let _ = owner_tx.send(true);
+        });
+        let wait = Duration::from_secs(30);
+        assert_eq!(
+            owner_rx.recv_timeout(wait),
+            Ok(true),
+            "starting must not wait for the OS watch"
+        );
+        wait_for_gate("the watcher thread never reached the OS watch", |gate| {
+            gate.watching
+        });
+        assert_eq!(
+            owner_rx.recv_timeout(wait),
+            Ok(true),
+            "dropping must not wait for the OS watch"
+        );
+        drop(open_gate);
+        wait_for_gate("dropping must still stop the OS watch", |gate| gate.dropped);
+    }
+
+    fn changes_while_and_after_arming(
+        reconcile_once_armed: bool,
+    ) -> (Vec<DiscoveryChange>, Vec<DiscoveryChange>) {
+        fn drain(rx: &mut mpsc::UnboundedReceiver<DiscoveryChange>) -> Vec<DiscoveryChange> {
+            std::iter::from_fn(|| rx.try_recv().ok()).collect()
+        }
+        let _owner = own_gate();
+        let open_gate = OpenGate;
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().to_path_buf();
+        let project_grok = project.join(xai_dirs::AGENT_DIR_NAME);
+        fs::create_dir(&project_grok).unwrap();
+        let (watcher, mut rx) = ProjectDiscoveryWatcher::spawn::<GatedWatcher>(
+            project,
+            project_grok,
+            reconcile_once_armed,
+        )
+        .expect("project watcher should start");
+        wait_for_gate("the watcher thread never reached the OS watch", |gate| {
+            gate.watching
+        });
+        let while_arming = drain(&mut rx);
+        drop(open_gate);
+        drop(watcher);
+        wait_for_gate("the watcher thread never stopped", |gate| gate.dropped);
+        (while_arming, drain(&mut rx))
+    }
+
+    #[test]
+    fn project_discovery_watcher_reconciles_once_the_os_watch_is_armed() {
+        let (while_arming, after_arming) = changes_while_and_after_arming(true);
+        assert_eq!(
+            while_arming,
+            Vec::new(),
+            "a reconcile sent before the OS watch is armed misses the files written meanwhile"
+        );
+        assert_eq!(
+            after_arming,
+            vec![DiscoveryChange::Skills],
+            "a session's watcher reconciles exactly once after the OS watch is armed"
+        );
+
+        let (while_arming, after_arming) = changes_while_and_after_arming(false);
+        assert_eq!(while_arming, Vec::new());
+        assert_eq!(
+            after_arming,
+            Vec::new(),
+            "a child's watcher sends nothing until a watched file changes"
+        );
     }
 
     #[test]
@@ -1410,8 +1644,9 @@ mod tests {
         let project_grok = project.join(".mlx-agent");
         fs::create_dir_all(project_grok.join("workflows")).unwrap();
 
-        let (_w, mut rx) = ProjectDiscoveryWatcher::start(project, &project.join("other-home"))
-            .expect("project watcher should start");
+        let (_w, mut rx) =
+            ProjectDiscoveryWatcher::start(project, &project.join("other-home"), false)
+                .expect("project watcher should start");
 
         // Batch-mode debounce delivers about SKILLS_DEBOUNCE after the first raw event
         let settle = SKILLS_DEBOUNCE + Duration::from_millis(500);

@@ -384,12 +384,14 @@ pub(super) async fn run_session(
     let _workflow_watch = crate::config::watcher::ProjectDiscoveryWatcher::start(
         std::path::Path::new(session.session_info.cwd.as_str()),
         &crate::util::grok_home::grok_home(),
+        // A child runs on the parent's skill list: a reload from its own cwd drops the parent's project skills
+        !session.startup_hints.is_subagent,
     )
-    .map(|(mut watcher, mut changes)| {
+    .map(|(watcher, mut changes)| {
         let session = session.clone();
         tokio::task::spawn_local(async move {
+            let _watcher = watcher;
             while let Some(change) = changes.recv().await {
-                watcher.refresh_new_dirs();
                 match change {
                     crate::config::watcher::DiscoveryChange::Skills => {
                         session.reload_skills_from_disk().await;
