@@ -152,10 +152,13 @@ impl XaiProtoBuilder {
 
         // Can only process one input file when using --dependency_out=FILE.
         for proto in protos {
+            // /dev/stdout + /dev/null are Unix-only; use temp files so Windows builds work.
+            let dep_out = tempfile::NamedTempFile::new()?;
+            let desc_out = tempfile::NamedTempFile::new()?;
             let mut command = Command::new(protoc.unwrap_or(Path::new("protoc")));
             command
-                .arg("--dependency_out=/dev/stdout")
-                .arg("--descriptor_set_out=/dev/null");
+                .arg(format!("--dependency_out={}", dep_out.path().display()))
+                .arg(format!("--descriptor_set_out={}", desc_out.path().display()));
 
             // Add protoc's well-known types include directory first (if found).
             // This is needed for Bazel sandboxed builds where protoc and its
@@ -181,12 +184,13 @@ impl XaiProtoBuilder {
                 return Err(anyhow::anyhow!("protoc command failed"));
             }
 
-            let output =
-                String::from_utf8(output.stdout).context("protoc command output not UTF-8")?;
+            let output = fs::read_to_string(dep_out.path())
+                .context("protoc dependency output not UTF-8")?;
 
             let mut lines = output.lines();
             let first_line = lines.next().context("protoc command output is empty")?;
-            let prefix = "/dev/null:";
+            let prefix = format!("{}:", desc_out.path().display());
+            let prefix = prefix.as_str();
             let rem = first_line.strip_prefix(prefix).with_context(|| {
                 format!("protoc command output must start with /dev/null: {output:?}")
             })?;
