@@ -150,17 +150,9 @@ struct KnownMarketplaceEntry {
     install_location: PathBuf,
 }
 
-/// Resolve user-level marketplaces from `known_marketplaces.json`, with their local `installLocation` paths.
+/// Resolve user-level marketplaces from `<claude_dir>/plugins/known_marketplaces.json`, with their local `installLocation` paths.
 /// Plugin dirs are filtered to names listed in `~/.claude/settings{.local}.json` `enabledPlugins`, so never-installed catalog plugins are skipped.
 /// A `false` entry there is an installed-but-disabled plugin; it is still discovered so its state can be mirrored.
-pub fn resolve_known_marketplaces() -> Vec<ResolvedMarketplace> {
-    let Some(home) = xai_dirs::home_dir() else {
-        return vec![];
-    };
-    resolve_known_marketplaces_in(&home.join(".claude"))
-}
-
-/// Like [`resolve_known_marketplaces`] but reads from an explicit `~/.claude` root, so tests stay isolated from the developer's real home dir.
 pub fn resolve_known_marketplaces_in(claude_dir: &Path) -> Vec<ResolvedMarketplace> {
     let json_path = claude_dir.join("plugins").join("known_marketplaces.json");
     let content = match std::fs::read_to_string(&json_path) {

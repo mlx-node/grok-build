@@ -3311,6 +3311,7 @@ fn session_plugins_config(
             crate::agent::folder_trust::project_scope_allowed(cwd),
         ),
         claude_import: crate::claude_import::import_marker(),
+        compat_env: &xai_grok_config::compat::CompatEnv::from_process(),
     })
 }
 /// RCE guard: a project `.grok/config.toml` must never source `[feedback.user]` (its `command` runs `sh -c`).

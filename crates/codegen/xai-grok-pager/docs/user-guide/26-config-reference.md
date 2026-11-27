@@ -120,6 +120,7 @@ User-level configuration lives in `$GROK_HOME/config.toml` (default `~/.grok/con
 | `compat.claude.agents` | `boolean` | `yes` | `user` | Scan CLAUDE.md. Also GROK_CLAUDE_AGENTS_ENABLED. |
 | `compat.claude.hooks` | `boolean` | `yes` | `user` | Scan Claude hooks. Also GROK_CLAUDE_HOOKS_ENABLED. |
 | `compat.claude.mcps` | `boolean` | `yes` | `user` | Scan Claude MCP config. Also GROK_CLAUDE_MCPS_ENABLED. |
+| `compat.claude.plugins` | `boolean` | `yes` | `user` | Load Claude plugins (`.claude/plugins/`, `~/.claude/plugins/`, `installed_plugins.json`, Claude marketplaces, `enabledPlugins`) and `.claude/agents/` definitions. Also GROK_CLAUDE_PLUGINS_ENABLED. |
 | `compat.claude.rules` | `boolean` | `yes` | `user` | Scan Claude rules. Also GROK_CLAUDE_RULES_ENABLED. |
 | `compat.claude.skills` | `boolean` | `yes` | `user` | Scan Claude skills. Also GROK_CLAUDE_SKILLS_ENABLED. |
 | `compat.codex.hooks` | `boolean` | `yes` | `user` | Scan Codex hooks when present. |

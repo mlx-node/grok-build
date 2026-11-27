@@ -1,11 +1,15 @@
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
+use xai_grok_config::compat::CompatEnv;
 use xai_grok_hooks::discovery::ClaudeImport;
 use xai_grok_hooks::trust::Trust;
 
 use super::PluginConfigInputs;
 use super::resolve_effective_plugins_config;
+
+static NO_COMPAT_ENV: LazyLock<CompatEnv> = LazyLock::new(CompatEnv::default);
 
 fn inputs<'a>(cwd: &'a Path, effective_config: Option<&'a toml::Value>) -> PluginConfigInputs<'a> {
     PluginConfigInputs {
@@ -15,6 +19,7 @@ fn inputs<'a>(cwd: &'a Path, effective_config: Option<&'a toml::Value>) -> Plugi
         cwd,
         trust: Trust::Untrusted,
         claude_import: ClaudeImport::Imported,
+        compat_env: &NO_COMPAT_ENV,
     }
 }
 
@@ -44,6 +49,44 @@ fn skips_claude_settings_plugins_only_after_claude_import() {
             expected,
             config.enabled.iter().any(|name| name == "cutoff-probe"),
             "{claude_import:?}"
+        );
+    }
+}
+
+#[test]
+fn claude_plugins_cell_off_adds_no_claude_settings_plugins() {
+    let home = tempfile::tempdir().expect("create temp home");
+    let cwd = tempfile::tempdir().expect("create temp cwd");
+    let claude = home.path().join(".claude");
+    std::fs::create_dir_all(&claude).expect("create .claude");
+    std::fs::write(
+        claude.join("settings.json"),
+        r#"{"enabledPlugins":{"on-probe@mp":true,"off-probe@mp":false}}"#,
+    )
+    .expect("write .claude/settings.json");
+    let config_off: toml::Value =
+        toml::from_str("[compat.claude]\nplugins = false\n").expect("parse config");
+    let env_off = CompatEnv::read(|name| (name == "GROK_CLAUDE_PLUGINS_ENABLED").then_some(false));
+
+    for (label, effective_config, compat_env, expected) in [
+        ("unset", None, &*NO_COMPAT_ENV, true),
+        ("env off", None, &env_off, false),
+        ("config off", Some(&config_off), &*NO_COMPAT_ENV, false),
+    ] {
+        let config = resolve_effective_plugins_config(PluginConfigInputs {
+            home: Some(home.path()),
+            claude_import: ClaudeImport::NotImported,
+            compat_env,
+            ..inputs(cwd.path(), effective_config)
+        });
+        assert_eq!(
+            (expected, expected, expected),
+            (
+                config.claude_plugins,
+                config.enabled.iter().any(|name| name == "on-probe"),
+                config.disabled.iter().any(|name| name == "off-probe"),
+            ),
+            "{label}"
         );
     }
 }

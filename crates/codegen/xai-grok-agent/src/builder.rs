@@ -2690,12 +2690,7 @@ mod tests {
         let registry = SharedPluginRegistryHandle::new(None, Vec::new())
             .build_for_cwd(
                 workdir.path(),
-                &DiscoveryConfig {
-                    cli_plugin_dirs: Vec::new(),
-                    config_paths: Vec::new(),
-                    disabled: Vec::new(),
-                    enabled: Vec::new(),
-                },
+                &DiscoveryConfig::default(),
                 &[plugin_dir],
                 false,
             )

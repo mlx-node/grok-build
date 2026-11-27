@@ -9,6 +9,7 @@ use serde::Serialize;
 use xai_grok_agent::plugins::PluginRegistry;
 use xai_grok_agent::plugins::SharedPluginRegistryHandle;
 use xai_grok_agent::plugins::discovery::DiscoveryConfig;
+use xai_grok_config::compat::CompatEnv;
 use xai_grok_hooks::discovery::ClaudeImport;
 use xai_grok_hooks::trust::Trust;
 
@@ -69,10 +70,12 @@ pub struct PluginConfigInputs<'a> {
     pub cwd: &'a Path,
     pub trust: Trust,
     pub claude_import: ClaudeImport,
+    pub compat_env: &'a CompatEnv,
 }
 
 /// A project's `[plugins].paths` merge only when `trust` allows project sources; its `disabled` list always merges.
-/// Claude plugin lists come only from `<home>/.claude/settings.json`, and not after a Claude import.
+/// Claude plugin lists come only from `<home>/.claude/settings.json`, and not after a Claude import or with the
+/// `claude.plugins` compat cell off.
 pub fn resolve_effective_plugins_config(inputs: PluginConfigInputs<'_>) -> DiscoveryConfig {
     let PluginConfigInputs {
         effective_config,
@@ -81,7 +84,10 @@ pub fn resolve_effective_plugins_config(inputs: PluginConfigInputs<'_>) -> Disco
         cwd,
         trust,
         claude_import,
+        compat_env,
     } = inputs;
+    let claude_plugins =
+        xai_grok_config::compat::resolve_compat_claude_plugins(effective_config, compat_env);
     let mut plugins = effective_config
         .map(PluginsConfig::from_config)
         .unwrap_or_default();
@@ -100,7 +106,8 @@ pub fn resolve_effective_plugins_config(inputs: PluginConfigInputs<'_>) -> Disco
 
     // A repo's own `.claude/settings.json` is never read:
     // it could enable its plugins' hooks before the repo is trusted.
-    if claude_import == ClaudeImport::NotImported
+    if claude_plugins
+        && claude_import == ClaudeImport::NotImported
         && let Some(home) = home
     {
         let (claude_enabled, claude_disabled) =
@@ -115,6 +122,7 @@ pub fn resolve_effective_plugins_config(inputs: PluginConfigInputs<'_>) -> Disco
         config_paths: plugins.paths.iter().map(PathBuf::from).collect(),
         disabled: plugins.disabled,
         enabled: plugins.enabled,
+        claude_plugins,
     }
 }
 

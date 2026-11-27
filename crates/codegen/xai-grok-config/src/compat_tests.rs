@@ -181,6 +181,57 @@ fn resolve_compat_hooks_treats_an_unreadable_cell_as_unset() {
 }
 
 #[test]
+fn resolve_compat_claude_plugins_env_over_config_over_default() {
+    let empty = toml::Value::Table(toml::map::Map::new());
+    let off: toml::Value = toml::from_str("[compat.claude]\nplugins = false\n").unwrap();
+    let on: toml::Value = toml::from_str("[compat.claude]\nplugins = true\n").unwrap();
+    let malformed: toml::Value =
+        toml::from_str("[compat.claude]\nplugins = \"malformed\"\n").unwrap();
+    let siblings_off: toml::Value =
+        toml::from_str("[compat.claude]\nskills = false\nhooks = false\nagents = false\n").unwrap();
+    let env_off = env_with(&[("GROK_CLAUDE_PLUGINS_ENABLED", false)]);
+    let env_on = env_with(&[("GROK_CLAUDE_PLUGINS_ENABLED", true)]);
+    let other_cells_off = env_with(&[
+        ("GROK_CLAUDE_SKILLS_ENABLED", false),
+        ("GROK_CLAUDE_HOOKS_ENABLED", false),
+        ("GROK_CLAUDE_MCPS_ENABLED", false),
+        ("GROK_CLAUDE_AGENTS_ENABLED", false),
+        ("GROK_CLAUDE_RULES_ENABLED", false),
+    ]);
+    let cases = [
+        ("unset", Some(&empty), CompatEnv::default(), true),
+        ("unreadable config", None, CompatEnv::default(), true),
+        ("config off", Some(&off), CompatEnv::default(), false),
+        (
+            "malformed cell",
+            Some(&malformed),
+            CompatEnv::default(),
+            true,
+        ),
+        ("env off", Some(&on), env_off.clone(), false),
+        ("env on over config off", Some(&off), env_on, true),
+        (
+            "only the other cells off",
+            Some(&siblings_off),
+            other_cells_off,
+            true,
+        ),
+    ];
+    for (label, effective_config, env, expected) in cases {
+        assert_eq!(
+            expected,
+            resolve_compat_claude_plugins(effective_config, &env),
+            "{label}"
+        );
+    }
+    assert!(
+        !resolve_compat_config(&CompatConfigToml::default(), &env_off, None)
+            .claude
+            .plugins
+    );
+}
+
+#[test]
 fn compat_config_cell_is_tolerant_and_fail_closed_per_cell() {
     let effective_config: toml::Value = toml::from_str(
         r#"
@@ -384,6 +435,7 @@ fn registry_and_defaults_cover_every_cell() {
             ("claude", "mcps", Some(ClaudeMcps)),
             ("claude", "hooks", Some(ClaudeHooks)),
             ("claude", "sessions", Some(ClaudeSessions)),
+            ("claude", "plugins", None),
             ("codex", "skills", None),
             ("codex", "rules", None),
             ("codex", "agents", None),
@@ -405,7 +457,7 @@ fn registry_and_defaults_cover_every_cell() {
     for vendor in [defaults.cursor, defaults.claude, defaults.codex] {
         assert!(vendor.skills && vendor.rules && vendor.agents);
         assert!(vendor.mcps && vendor.hooks);
-        assert!(vendor.sessions);
+        assert!(vendor.sessions && vendor.plugins);
     }
 
     assert_eq!(
@@ -432,6 +484,7 @@ fn registry_and_defaults_cover_every_cell() {
             ("claude", "mcps"),
             ("claude", "hooks"),
             ("claude", "sessions"),
+            ("claude", "plugins"),
             ("codex", "sessions"),
         ]
     );

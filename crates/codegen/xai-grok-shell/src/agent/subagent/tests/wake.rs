@@ -1150,12 +1150,7 @@ async fn workflow_child_first_request_lists_parent_skills() {
             .expect("plugin skill");
             let registry = SharedPluginRegistryHandle::new(None, Vec::new()).build_for_cwd(
                 workdir.path(),
-                &DiscoveryConfig {
-                    cli_plugin_dirs: Vec::new(),
-                    config_paths: Vec::new(),
-                    disabled: Vec::new(),
-                    enabled: Vec::new(),
-                },
+                &DiscoveryConfig::default(),
                 &[plugin_dir],
                 false,
             );

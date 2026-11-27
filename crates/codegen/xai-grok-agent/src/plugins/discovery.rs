@@ -168,7 +168,7 @@ impl DiscoveredPlugin {
 }
 
 /// Configuration for plugin discovery.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct DiscoveryConfig {
     /// CLI `--plugin-dir` paths.
     pub cli_plugin_dirs: Vec<PathBuf>,
@@ -178,6 +178,21 @@ pub struct DiscoveryConfig {
     pub disabled: Vec<String>,
     /// `[plugins].enabled` plugin IDs or names (overrides default-disabled for project plugins).
     pub enabled: Vec<String>,
+    /// The `claude.plugins` compat cell: scan `.claude/plugins`, `~/.claude/plugins`,
+    /// `installed_plugins.json`, and Claude compat marketplaces.
+    pub claude_plugins: bool,
+}
+
+impl Default for DiscoveryConfig {
+    fn default() -> Self {
+        Self {
+            cli_plugin_dirs: Vec::new(),
+            config_paths: Vec::new(),
+            disabled: Vec::new(),
+            enabled: Vec::new(),
+            claude_plugins: true,
+        }
+    }
 }
 
 impl DiscoveryConfig {
@@ -259,6 +274,25 @@ pub fn discover_plugins(
     trust_store: &TrustStore,
     project_trusted: bool,
 ) -> Vec<DiscoveredPlugin> {
+    let grok = xai_grok_config::user_grok_home();
+    discover_plugins_with_home(
+        cwd,
+        config,
+        trust_store,
+        project_trusted,
+        xai_dirs::home_dir().as_deref(),
+        grok.as_deref(),
+    )
+}
+
+fn discover_plugins_with_home(
+    cwd: Option<&Path>,
+    config: &DiscoveryConfig,
+    trust_store: &TrustStore,
+    project_trusted: bool,
+    home: Option<&Path>,
+    grok_home: Option<&Path>,
+) -> Vec<DiscoveredPlugin> {
     let _plugin_discovery_timer = crate::timing::timer("plugin_discovery");
     let mut seen_paths: HashSet<PathBuf> = HashSet::new();
     let mut candidates: Vec<DiscoveredPlugin> = Vec::new();
@@ -286,6 +320,9 @@ pub fn discover_plugins(
         let (project_dirs, git_root) = project_plugin_dirs(Some(cwd));
         for plugins_dir in project_dirs {
             let origin = project_plugins_dir_origin(&plugins_dir);
+            if !config.claude_plugins && origin == PluginOrigin::ProjectClaude {
+                continue;
+            }
             scan_plugin_dir(
                 &plugins_dir,
                 PluginScope::Project,
@@ -299,7 +336,7 @@ pub fn discover_plugins(
 
         // 3b. Marketplace plugins (extraKnownMarketplaces in .claude/settings.json).
         // Reuse the git root resolved above instead of walking the repo again
-        if let Some(ref root) = git_root {
+        if let Some(ref root) = git_root.filter(|_| config.claude_plugins) {
             for marketplace in &super::marketplace::resolve(root) {
                 for dir in &marketplace.plugin_dirs {
                     collect_plugin(
@@ -320,9 +357,10 @@ pub fn discover_plugins(
 
     // 4-5. User plugins: $GROK_HOME/plugins, legacy ~/.grok/plugins, ~/.claude/plugins.
     // Gate the grok plugins dir on user_grok_home() so a project's .grok/plugins is never scanned as user-global when no home resolves
-    let grok = xai_grok_config::user_grok_home();
-    let plugin_dirs = user_plugin_dirs(xai_dirs::home_dir().as_deref(), grok.as_deref());
-    for (plugins_dir, origin) in plugin_dirs {
+    for (plugins_dir, origin) in user_plugin_dirs(home, grok_home) {
+        if !config.claude_plugins && origin == PluginOrigin::UserClaude {
+            continue;
+        }
         if plugins_dir.is_dir() {
             scan_plugin_dir(
                 &plugins_dir,
@@ -339,7 +377,11 @@ pub fn discover_plugins(
     // 5a. Known marketplaces (~/.claude/plugins/known_marketplaces.json).
     // Marketplace repos are cloned locally and registered here.
     // Each marketplace has a plugins/ (and optionally external_plugins/) subdirectory.
-    for marketplace in &super::marketplace::resolve_known_marketplaces() {
+    let known_marketplaces = home
+        .filter(|_| config.claude_plugins)
+        .map(|home| super::marketplace::resolve_known_marketplaces_in(&home.join(".claude")))
+        .unwrap_or_default();
+    for marketplace in &known_marketplaces {
         for dir in &marketplace.plugin_dirs {
             collect_plugin(
                 dir,
@@ -373,7 +415,7 @@ pub fn discover_plugins(
     // 5c. Installed plugins (~/.claude/plugins/installed_plugins.json).
     // Entries carry explicit installPath dirs (nested under cache/<marketplace>/<plugin>/<version>/)
     // The plugin name is extracted from the JSON key ("name@marketplace").
-    if let Some(home) = xai_dirs::home_dir() {
+    if let Some(home) = home.filter(|_| config.claude_plugins) {
         let installed_json = home
             .join(".claude")
             .join("plugins")
@@ -1590,6 +1632,109 @@ mod tests {
             .expect("project claude plugin discovered");
         assert_eq!(p.scope, PluginScope::Project);
         assert_eq!(p.origin, PluginOrigin::ProjectClaude);
+    }
+
+    /// One plugin per discovery source, Claude compat and native, under an injected home and Grok home.
+    /// Returns the names discovered among them.
+    fn discover_one_plugin_per_source(claude_plugins: bool) -> Vec<String> {
+        let tmp = tempfile::tempdir().unwrap();
+        let name = |source: &str| format!("ccp{}-{source}", std::process::id());
+        let project = tmp.path().join("project");
+        let home = tmp.path().join("home");
+        let grok_home = tmp.path().join("grok-home");
+        std::fs::create_dir_all(&project).unwrap();
+        git2::Repository::init(&project).unwrap();
+
+        make_manifest_plugin(&project.join(".grok/plugins"), &name("project-grok"));
+        make_manifest_plugin(&project.join(".claude/plugins"), &name("project-claude"));
+        make_manifest_plugin(&project.join("mp/plugins"), &name("project-marketplace"));
+        std::fs::write(
+            project.join(".claude/settings.json"),
+            serde_json::json!({
+                "extraKnownMarketplaces": {"local": {"source": {"path": "mp"}}},
+                "enabledPlugins": {format!("{}@local", name("project-marketplace")): true},
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let claude_plugins_dir = home.join(".claude/plugins");
+        make_manifest_plugin(&claude_plugins_dir, &name("user-claude"));
+        let installed = make_manifest_plugin(&tmp.path().join("cache"), &name("user-installed"));
+        std::fs::write(
+            claude_plugins_dir.join("installed_plugins.json"),
+            serde_json::json!({
+                "version": 2,
+                "plugins": {
+                    format!("{}@mp", name("user-installed")): [
+                        {"scope": "user", "installPath": installed},
+                    ],
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let known = tmp.path().join("known");
+        make_manifest_plugin(&known.join("plugins"), &name("user-known"));
+        std::fs::write(
+            claude_plugins_dir.join("known_marketplaces.json"),
+            serde_json::json!({"known": {"installLocation": known}}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            home.join(".claude/settings.json"),
+            serde_json::json!({
+                "enabledPlugins": {format!("{}@known", name("user-known")): true},
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        make_manifest_plugin(&grok_home.join("plugins"), &name("user-grok"));
+        let config = DiscoveryConfig {
+            cli_plugin_dirs: vec![make_manifest_plugin(tmp.path(), &name("cli-dir"))],
+            config_paths: vec![make_manifest_plugin(tmp.path(), &name("config-path"))],
+            claude_plugins,
+            ..DiscoveryConfig::default()
+        };
+
+        let trust = TrustStore::load_from(tmp.path().join("trust"));
+        let prefix = name("");
+        let mut found: Vec<String> = discover_plugins_with_home(
+            Some(&project),
+            &config,
+            &trust,
+            true,
+            Some(&home),
+            Some(&grok_home),
+        )
+        .into_iter()
+        .filter_map(|p| p.manifest.name.strip_prefix(&prefix).map(str::to_owned))
+        .collect();
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn claude_plugins_off_skips_every_claude_source_and_keeps_the_rest() {
+        assert_eq!(
+            vec![
+                "cli-dir",
+                "config-path",
+                "project-claude",
+                "project-grok",
+                "project-marketplace",
+                "user-claude",
+                "user-grok",
+                "user-installed",
+                "user-known",
+            ],
+            discover_one_plugin_per_source(true)
+        );
+        assert_eq!(
+            vec!["cli-dir", "config-path", "project-grok", "user-grok"],
+            discover_one_plugin_per_source(false)
+        );
     }
 
     #[test]

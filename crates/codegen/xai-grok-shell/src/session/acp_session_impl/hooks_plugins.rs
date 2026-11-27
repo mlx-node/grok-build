@@ -807,6 +807,7 @@ impl SessionActor {
                 cwd: session_cwd,
                 trust: xai_grok_hooks::trust::Trust::from_verdict(project_trusted),
                 claude_import: crate::claude_import::import_marker(),
+                compat_env: &xai_grok_config::compat::CompatEnv::from_process(),
             },
         );
         let config_read_ms = t0.elapsed().as_millis();
@@ -886,6 +887,7 @@ impl SessionActor {
                 cwd: session_cwd,
                 trust: xai_grok_hooks::trust::Trust::from_verdict(project_trusted),
                 claude_import: crate::claude_import::import_marker(),
+                compat_env: &xai_grok_config::compat::CompatEnv::from_process(),
             },
         );
         handle.build_for_cwd(session_cwd, &disk_cfg, &dirs, project_trusted)

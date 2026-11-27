@@ -2065,12 +2065,7 @@ fn validate_subagent_type_accepts_plugin_types_and_lists_them_when_unknown() {
     let registry = SharedPluginRegistryHandle::new(None, Vec::new())
         .build_for_cwd(
             workdir.path(),
-            &DiscoveryConfig {
-                cli_plugin_dirs: Vec::new(),
-                config_paths: Vec::new(),
-                disabled: Vec::new(),
-                enabled: Vec::new(),
-            },
+            &DiscoveryConfig::default(),
             &[plugin_dir],
             false,
         );
@@ -2870,12 +2865,7 @@ async fn workflow_children_list_skills_from_the_parent_session_registry() {
     let parent_registry = SharedPluginRegistryHandle::new(None, Vec::new())
         .build_for_cwd(
             workdir.path(),
-            &DiscoveryConfig {
-                cli_plugin_dirs: Vec::new(),
-                config_paths: Vec::new(),
-                disabled: Vec::new(),
-                enabled: Vec::new(),
-            },
+            &DiscoveryConfig::default(),
             &[plugin_dir],
             false,
         );

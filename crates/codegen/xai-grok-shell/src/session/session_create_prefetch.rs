@@ -186,6 +186,7 @@ async fn refresh_plugins_for_cwd(
                 cwd: &cwd,
                 trust,
                 claude_import: crate::claude_import::import_marker(),
+                compat_env: &xai_grok_config::compat::CompatEnv::from_process(),
             },
         )
     })
