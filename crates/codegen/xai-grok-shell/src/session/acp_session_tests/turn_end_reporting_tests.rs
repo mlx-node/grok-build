@@ -504,7 +504,8 @@ async fn session_end_cancels_in_flight_start_hook() {
             .unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
             loop {
-                if child_pid.exists() {
+                // The shell creates the pid file before it writes the pid; a kill in between leaves it empty
+                if std::fs::read_to_string(&child_pid).is_ok_and(|pid| pid.ends_with('\n')) {
                     return;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;

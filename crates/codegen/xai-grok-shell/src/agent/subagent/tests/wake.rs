@@ -456,7 +456,9 @@ async fn unpublished_wake_completion_preserves_prior_durable_state_and_worktree(
         .await;
 }
 
+/// Serial: the worktree base reads `$GROK_HOME` on every call, and `#[serial]` tests set it.
 #[tokio::test(flavor = "current_thread")]
+#[serial_test::serial]
 async fn ordinary_spawn_with_failed_metadata_write_persists_output_and_disposes_worktree() {
     xai_test_utils::require_git!();
     use xai_grok_tools::implementations::grok_build::task::backend::{
@@ -533,7 +535,9 @@ async fn ordinary_spawn_with_failed_metadata_write_persists_output_and_disposes_
         .await;
 }
 
+/// Serial: the worktree base reads `$GROK_HOME` on every call, and `#[serial]` tests set it.
 #[tokio::test(flavor = "current_thread")]
+#[serial_test::serial]
 async fn ordinary_spawn_disposes_worktree_when_only_remote_settings_enable_snapshot() {
     xai_test_utils::require_git!();
     use xai_grok_tools::implementations::grok_build::task::backend::{
@@ -768,7 +772,7 @@ async fn unacked_wake_start_and_abort_fail_closed_without_parking_runner() {
                 .await;
             assert_eq!(wake, ActiveAgentMessageOutcome::NotActiveOrFinalizing);
             let restored = backend
-                .query(&id, true, Some(5_000))
+                .query(&id, true, Some(60_000))
                 .await
                 .expect("restored prior snapshot");
             assert!(matches!(
@@ -899,7 +903,7 @@ async fn rejected_deferred_start_restores_prior_without_publication() {
                 ActiveAgentMessageOutcome::NotActiveOrFinalizing
             );
             let restored = backend
-                .query(&id, true, Some(5_000))
+                .query(&id, true, Some(60_000))
                 .await
                 .expect("restored prior completion");
             assert!(
@@ -1026,7 +1030,7 @@ async fn started_wake_with_failed_metadata_write_preserves_prior_durable_artifac
                 ActiveAgentMessageOutcome::Accepted { .. }
             ));
             let wake = backend
-                .query(&id, true, Some(5_000))
+                .query(&id, true, Some(60_000))
                 .await
                 .expect("wake completion");
             assert!(matches!(

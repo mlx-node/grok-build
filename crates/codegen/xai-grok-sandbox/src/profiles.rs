@@ -565,7 +565,10 @@ impl ProfileName {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{network_inheritance_config, skip_if_host_hook_write_deny_unresolvable};
+    use crate::test_util::{
+        network_inheritance_config, skip_if_host_hook_write_deny_unresolvable,
+        skip_if_host_runtime_socket_unresolvable,
+    };
 
     #[test]
     fn project_sandbox_toml_is_read_only_from_the_agent_folder() {
@@ -702,7 +705,8 @@ mod tests {
 
     #[test]
     fn built_in_network_restriction_values() {
-        if skip_if_host_hook_write_deny_unresolvable() {
+        if skip_if_host_hook_write_deny_unresolvable() || skip_if_host_runtime_socket_unresolvable()
+        {
             return;
         }
         let workspace = std::env::current_dir().unwrap();
@@ -721,7 +725,8 @@ mod tests {
 
     #[test]
     fn custom_network_restriction_inherits_and_overrides_base() {
-        if skip_if_host_hook_write_deny_unresolvable() {
+        if skip_if_host_hook_write_deny_unresolvable() || skip_if_host_runtime_socket_unresolvable()
+        {
             return;
         }
         let workspace = std::env::current_dir().unwrap();
@@ -742,7 +747,8 @@ mod tests {
     #[test]
     #[cfg(all(feature = "enforce", unix))]
     fn strict_allowlist_includes_run_and_var_when_present() {
-        if skip_if_host_hook_write_deny_unresolvable() {
+        if skip_if_host_hook_write_deny_unresolvable() || skip_if_host_runtime_socket_unresolvable()
+        {
             return;
         }
         // Regression: /run (resolv realpath) and /var (NSS/SSSD) when present
@@ -769,7 +775,8 @@ mod tests {
 
     #[test]
     fn strict_reads_grok_home_but_only_sessions_writable() {
-        if skip_if_host_hook_write_deny_unresolvable() {
+        if skip_if_host_hook_write_deny_unresolvable() || skip_if_host_runtime_socket_unresolvable()
+        {
             return;
         }
         let workspace = std::env::temp_dir();
@@ -831,7 +838,8 @@ mod tests {
 
     #[test]
     fn workspace_and_read_only_still_include_grok_home() {
-        if skip_if_host_hook_write_deny_unresolvable() {
+        if skip_if_host_hook_write_deny_unresolvable() || skip_if_host_runtime_socket_unresolvable()
+        {
             return;
         }
         let workspace = std::env::temp_dir();
@@ -864,7 +872,8 @@ mod tests {
     #[test]
     #[cfg(all(feature = "enforce", unix))]
     fn custom_profile_from_config() {
-        if skip_if_host_hook_write_deny_unresolvable() {
+        if skip_if_host_hook_write_deny_unresolvable() || skip_if_host_runtime_socket_unresolvable()
+        {
             return;
         }
         let workspace = std::env::current_dir().unwrap();
@@ -1238,7 +1247,8 @@ read_write = ["/tmp/ci-artifacts"]
     #[test]
     #[cfg(all(feature = "enforce", unix))]
     fn strict_capability_set_builds_without_openable_dev_tty() {
-        if skip_if_host_hook_write_deny_unresolvable() {
+        if skip_if_host_hook_write_deny_unresolvable() || skip_if_host_runtime_socket_unresolvable()
+        {
             return;
         }
         let workspace = std::env::current_dir().unwrap();

@@ -7,6 +7,14 @@ fn assert_follow_refused(err: &std::io::Error) {
     );
 }
 
+/// The resolver follows the temp dir's own symlinks too (macOS `/var` -> `/private/var`).
+#[cfg(unix)]
+fn canonical_tempdir() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dunce::canonicalize(dir.path()).expect("canonicalize tempdir");
+    (dir, root)
+}
+
 #[test]
 fn write_atomically_replaces_and_if_absent_refuses() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -150,12 +158,12 @@ fn write_atomically_replaces_leaf_symlink() {
 #[cfg(unix)]
 #[test]
 fn resolve_atomic_destination_follows_leaf_symlink() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let repo = dir.path().join("dotfiles");
+    let (_dir, root) = canonical_tempdir();
+    let repo = root.join("dotfiles");
     std::fs::create_dir_all(&repo).expect("dotfiles dir");
     let target = repo.join("config.toml");
     std::fs::write(&target, "before").expect("seed target");
-    let link = dir.path().join("config.toml");
+    let link = root.join("config.toml");
     std::os::unix::fs::symlink(&target, &link).expect("symlink");
 
     let dest = resolve_atomic_destination(&link).expect("follow");
@@ -272,7 +280,7 @@ fn resolve_refuses_chain_past_darwin_maxsymlinks() {
     let (head, leaf) = symlink_chain(dir.path(), 33);
 
     let err = resolve_atomic_destination(&head).expect_err("Darwin ELOOP length");
-    assert_eq!(std::io::ErrorKind::InvalidInput, err.kind());
+    assert_follow_refused(&err);
     assert!(
         std::fs::symlink_metadata(&head)
             .expect("head")
@@ -427,10 +435,10 @@ fn resolve_refuses_parent_through_missing_then_symlink() {
 #[cfg(unix)]
 #[test]
 fn resolve_parent_through_directory_reaches_sibling() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let nested = dir.path().join("nested");
+    let (_dir, root) = canonical_tempdir();
+    let nested = root.join("nested");
     std::fs::create_dir(&nested).expect("nested");
-    let victim = dir.path().join("victim");
+    let victim = root.join("victim");
     let via = nested.join("..").join("victim");
 
     assert_eq!(
@@ -587,9 +595,9 @@ fn drop_dac_override_and_search<T>(f: impl FnOnce() -> T) -> T {
 #[cfg(unix)]
 #[test]
 fn dangling_file_symlink_follow_vs_replace() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let target = dir.path().join("dotfiles.toml");
-    let follow_link = dir.path().join("config.toml");
+    let (_dir, root) = canonical_tempdir();
+    let target = root.join("dotfiles.toml");
+    let follow_link = root.join("config.toml");
     std::os::unix::fs::symlink(&target, &follow_link).expect("dangling follow");
 
     let dest = resolve_atomic_destination(&follow_link).expect("follow dangling");
@@ -742,10 +750,10 @@ fn path_names_directory_unix_backslash_is_filename() {
 #[cfg(unix)]
 #[test]
 fn resolve_follows_unix_backslash_filename_symlink() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let target = dir.path().join("target\\");
+    let (_dir, root) = canonical_tempdir();
+    let target = root.join("target\\");
     std::fs::write(&target, "before").expect("backslash filename");
-    let link = dir.path().join("config.toml");
+    let link = root.join("config.toml");
     std::os::unix::fs::symlink(&target, &link).expect("symlink");
 
     let dest = resolve_atomic_destination(&link).expect("follow backslash name");
@@ -1405,12 +1413,12 @@ fn followed_id_rejects_decoy_that_is_not_the_target() {
 #[cfg(unix)]
 #[test]
 fn require_same_follow_destination_detects_retarget() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let a = dir.path().join("a.toml");
-    let b = dir.path().join("b.toml");
+    let (_dir, root) = canonical_tempdir();
+    let a = root.join("a.toml");
+    let b = root.join("b.toml");
     std::fs::write(&a, "A").expect("a");
     std::fs::write(&b, "B").expect("b");
-    let link = dir.path().join("config.toml");
+    let link = root.join("config.toml");
     std::os::unix::fs::symlink(&a, &link).expect("->A");
     let dest = resolve_atomic_destination(&link).expect("A");
     assert_eq!(a, dest);

@@ -101,6 +101,7 @@ fn file_len_and_mtime(path: &std::path::Path) -> Option<(u64, Option<std::time::
 }
 
 #[test]
+#[serial_test::serial]
 fn unit_test_bootstrap_does_not_touch_the_managed_config_lock() {
     let dir = tempfile::tempdir().expect("tempdir");
     let home = dir.path().to_str().expect("utf8 temp home");

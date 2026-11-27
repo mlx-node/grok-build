@@ -149,6 +149,9 @@ fn terminator_must_fit_the_tail() {
 fn write_all_until_delivers_and_restores_flags() {
     let (writer, mut reader) = UnixStream::pair().expect("socket pair");
     let fd = writer.as_raw_fd();
+    // macOS sets a kernel-only F_GETFL bit (0x10000) on the first write(2), not on send(2); take the baseline after one.
+    // SAFETY: fd is the live socket above and the buffer is one valid byte.
+    assert_eq!(1, unsafe { libc::write(fd, b"x".as_ptr().cast(), 1) });
     let flags_before = file_status_flags(fd).expect("F_GETFL");
 
     assert!(write_all_until(fd, b"\x1b[c", far_deadline()));
@@ -157,9 +160,9 @@ fn write_all_until_delivers_and_restores_flags() {
     reader
         .set_read_timeout(Some(Duration::from_secs(2)))
         .expect("set read timeout");
-    let mut arrived = [0u8; 3];
+    let mut arrived = [0u8; 4];
     reader.read_exact(&mut arrived).expect("query arrived");
-    assert_eq!(b"\x1b[c", &arrived);
+    assert_eq!(b"x\x1b[c", &arrived);
 }
 
 /// A terminal that stopped reading leaves the output buffer full.

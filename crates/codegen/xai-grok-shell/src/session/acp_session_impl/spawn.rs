@@ -2559,6 +2559,7 @@ pub(crate) fn bind_installed_toolset(
         }
     }
 }
+pub(crate) const SESSION_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
 /// The entire `spawn_session_actor` body runs on the session thread: the `!Send` `SessionActor` never crosses a
 /// thread boundary, and the `Send` results come back to the caller over a oneshot.
 #[allow(clippy::too_many_arguments)]
@@ -2698,7 +2699,6 @@ pub(crate) async fn spawn_session_on_thread(
         None => sid.as_str(),
     };
     let thread_name = format!("ses-{sid_prefix}");
-    const SESSION_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
     let history_load_span = match spawn_trace.as_ref() {
         Some(ctx) => tracing::info_span!(parent: &ctx.parent, "spawn.history_load"),
         None => tracing::info_span!("spawn.history_load"),

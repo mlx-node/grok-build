@@ -5393,6 +5393,18 @@ fn cold_load_stamps_identity_exactly_once() {
         agent.remove_session(&sid);
     });
 }
+/// A rollback waits out the withdrawn actor's thread only for `DRAIN_OLD_THREAD_WAIT`; the thread holds the
+/// actor's toolset until its teardown ends, and that teardown (an FSEvents stream stop on macOS) can take longer under load.
+async fn assert_toolset_released(
+    toolset: &std::sync::Weak<xai_grok_tools::registry::types::FinalizedToolset>,
+    message: &str,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while toolset.strong_count() > 0 {
+        assert!(std::time::Instant::now() < deadline, "{message}");
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
 #[test]
 fn failed_identity_stamp_fails_the_cold_load_closed() {
     run_local_for_bridge_test(|| async {
@@ -5433,10 +5445,11 @@ fn failed_identity_stamp_fails_the_cold_load_closed() {
             workspace_session_count(&agent),
             "the failed install must release its workspace binding"
         );
-        assert!(
-            toolset.upgrade().is_none(),
-            "nothing may keep the failed install's toolset alive"
-        );
+        assert_toolset_released(
+            &toolset,
+            "nothing may keep the failed install's toolset alive",
+        )
+        .await;
     });
 }
 /// The binding follows the registry's decision: an install the registry refuses never touches the
@@ -5649,10 +5662,11 @@ fn stamp_rollback_leaves_a_binding_taken_during_the_stamp_intact() {
             std::sync::Arc::ptr_eq(&newer_toolset, &workspace_toolset(&agent, &sid)),
             "the newer binding stays in place"
         );
-        assert!(
-            installed_toolset.upgrade().is_none(),
-            "nothing may keep the withdrawn install's toolset alive"
-        );
+        assert_toolset_released(
+            &installed_toolset,
+            "nothing may keep the withdrawn install's toolset alive",
+        )
+        .await;
     });
 }
 /// Nothing of a withdrawn install may survive: no resident, no directory row, no workspace binding.
@@ -5957,6 +5971,20 @@ fn a_cancelled_installer_retires_its_thread_when_a_reinstall_takes_the_slot() {
             crate::agent::mvp_agent::session_lifecycle::CloseOutcome::Closed,
             agent.close_active_session(&sid).await
         );
+        // Close waits out the actor's thread only for `DRAIN_OLD_THREAD_WAIT`; under load its teardown outlasts that,
+        // and the install below would retire it beside the two threads counted later.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            agent.sweep_dead_sessions();
+            if agent.session_registry.counts().session_threads == 0 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the closed session's thread must exit"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
         crate::session::persistence::STAMPS_SERVED.set(0);
         let (_installer_attach, installer_waiter) = agent.session_registry.begin_attach(&sid);
         let (handle, _cmd_tx, mut cmd_rx) = make_live_session_handle(&sid, None);
@@ -7459,6 +7487,8 @@ fn gated_reconnect_recheck_lifts_gate_clearing_paywall_flash() {
             while !accept_stop.load(std::sync::atomic::Ordering::Acquire) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // macOS gives an accepted socket the listener's O_NONBLOCK; a read before the request lands would end the head and answer 404.
+                        stream.set_nonblocking(false).expect("blocking stream");
                         let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
                         let mut head = Vec::new();
                         let mut byte = [0u8; 1];

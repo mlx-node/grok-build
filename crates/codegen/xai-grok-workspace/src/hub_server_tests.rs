@@ -1719,7 +1719,10 @@ async fn dispatch_store_session_image_accepts_exact_size_limit() {
     let response: StoreSessionImageRes = serde_json::from_value(value).unwrap();
     let path = std::path::PathBuf::from(response.file_path);
     assert_eq!(bytes, std::fs::read(&path).unwrap());
-    assert_eq!(vec![path], directory_entries(folder.path()));
+    assert_eq!(
+        vec![path],
+        directory_entries(&dunce::canonicalize(folder.path()).unwrap())
+    );
 }
 #[tokio::test]
 async fn dispatch_store_session_image_reports_write_failure() {

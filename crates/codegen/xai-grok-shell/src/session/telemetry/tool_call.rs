@@ -709,7 +709,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn path_scope_follows_the_registered_id_not_the_client_name() {
+        // A HOME under the temp dir classifies as Tmp, so the Home case needs a HOME outside it.
+        let _home = xai_grok_test_support::EnvGuard::set("HOME", "/home/path-scope-test");
         let cwd = Path::new("/opt/repo");
         let read_file = registered(ToolNamespace::GrokBuild, &ReadFileTool);
         let concise_read = registered(ToolNamespace::GrokBuildConcise, &ReadFileConciseTool);

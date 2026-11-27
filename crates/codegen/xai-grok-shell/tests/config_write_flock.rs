@@ -1,7 +1,9 @@
 //! Regression: settings saves must serialize against config-init-flock writers, or the two
 //! domains interleave read-modify-writes and the last atomic rename drops the other side's edit.
 
-use std::path::Path;
+#![cfg(any(target_os = "linux", target_os = "macos"))]
+
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 fn wait_for(deadline: Instant, mut check: impl FnMut() -> bool) -> bool {
@@ -14,22 +16,49 @@ fn wait_for(deadline: Instant, mut check: impl FnMut() -> bool) -> bool {
     false
 }
 
+#[cfg(target_os = "linux")]
+fn open_fd_paths() -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir("/proc/self/fd") else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| std::fs::read_link(entry.path()).ok())
+        .collect()
+}
+
+/// macOS has no `/proc`, and `/dev/fd` entries are not links: ask each fd for its path.
+#[cfg(target_os = "macos")]
+fn open_fd_paths() -> Vec<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(entries) = std::fs::read_dir("/dev/fd") else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<libc::c_int>().ok())
+        .filter_map(|fd| {
+            let mut buf = [0u8; libc::PATH_MAX as usize];
+            // SAFETY: F_GETPATH writes at most PATH_MAX bytes, NUL included, into `buf`.
+            if unsafe { libc::fcntl(fd, libc::F_GETPATH, buf.as_mut_ptr()) } != 0 {
+                return None;
+            }
+            let len = buf.iter().position(|&b| b == 0)?;
+            Some(PathBuf::from(std::ffi::OsStr::from_bytes(&buf[..len])))
+        })
+        .collect()
+}
+
 /// `acquire_init_lock` opens `.config-init.lock` before its 1s `try_lock` loop.
 /// A second fd means the saver is already in that loop.
 fn saver_has_opened_init_lock(lock_path: &Path) -> bool {
-    let Ok(entries) = std::fs::read_dir("/proc/self/fd") else {
-        return false;
-    };
-    let opens = entries
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            let Ok(linked) = std::fs::read_link(entry.path()) else {
-                return false;
-            };
+    let opens = open_fd_paths()
+        .into_iter()
+        .filter(|linked| {
             if linked == lock_path {
                 return true;
             }
-            match (dunce::canonicalize(&linked), dunce::canonicalize(lock_path)) {
+            match (dunce::canonicalize(linked), dunce::canonicalize(lock_path)) {
                 (Ok(linked), Ok(lock_path)) => linked == lock_path,
                 _ => false,
             }

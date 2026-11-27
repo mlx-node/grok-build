@@ -31,6 +31,14 @@ fn known_os_dirs() -> Vec<PathBuf> {
 }
 
 pub fn is_project_dir(cwd: &Path) -> bool {
+    is_project_dir_in(cwd, xai_dirs::home_dir, known_os_dirs)
+}
+
+fn is_project_dir_in(
+    cwd: &Path,
+    home_dir: impl FnOnce() -> Option<PathBuf>,
+    os_dirs: impl FnOnce() -> Vec<PathBuf>,
+) -> bool {
     if cwd.as_os_str().is_empty() || cwd.parent().is_none() {
         return false;
     }
@@ -47,7 +55,7 @@ pub fn is_project_dir(cwd: &Path) -> bool {
         return false;
     }
 
-    let Some(home) = xai_dirs::home_dir() else {
+    let Some(home) = home_dir() else {
         return false;
     };
 
@@ -59,7 +67,7 @@ pub fn is_project_dir(cwd: &Path) -> bool {
         return false;
     }
 
-    if known_os_dirs().iter().any(|d| cwd == d) {
+    if os_dirs().iter().any(|d| cwd == d) {
         return false;
     }
 
@@ -177,6 +185,23 @@ fn has_excluded_component(path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    /// A home with no excluded component; a test HOME can sit under one (`~/.cache/...`).
+    fn test_home() -> PathBuf {
+        PathBuf::from(if cfg!(windows) {
+            r"C:\Users\tester"
+        } else {
+            "/Users/tester"
+        })
+    }
+
+    fn is_project_dir_in_test_home(cwd: &Path) -> bool {
+        is_project_dir_in(
+            cwd,
+            || Some(test_home()),
+            || vec![test_home().join("Desktop")],
+        )
+    }
+
     #[cfg(not(target_os = "windows"))]
     mod posix {
         use super::*;
@@ -230,11 +255,9 @@ mod tests {
 
         #[test]
         fn icloud_drive_projects_are_safe() {
-            if let Some(home) = xai_dirs::home_dir() {
-                assert!(is_project_dir(&home.join(
-                    "Library/Mobile Documents/com~apple~CloudDocs/Projects/my-app"
-                )));
-            }
+            assert!(is_project_dir_in_test_home(&test_home().join(
+                "Library/Mobile Documents/com~apple~CloudDocs/Projects/my-app"
+            )));
         }
     }
 
@@ -301,9 +324,7 @@ mod tests {
 
         #[test]
         fn home_project_is_safe() {
-            if let Some(home) = xai_dirs::home_dir() {
-                assert!(is_project_dir(&home.join("my-project")));
-            }
+            assert!(is_project_dir_in_test_home(&test_home().join("my-project")));
         }
 
         #[test]
@@ -315,9 +336,9 @@ mod tests {
 
         #[test]
         fn desktop_project_is_safe() {
-            if let Some(d) = dirs::desktop_dir() {
-                assert!(is_project_dir(&d.join("my-project")));
-            }
+            assert!(is_project_dir_in_test_home(
+                &test_home().join("Desktop/my-project")
+            ));
         }
     }
 

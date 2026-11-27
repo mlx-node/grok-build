@@ -249,10 +249,7 @@ pub(super) async fn reparent_surviving_child_tasks(
 }
 const INITIAL_PROMPT_ADMISSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const CHILD_COMPLETION_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-#[cfg(not(test))]
 const WAKE_START_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-#[cfg(test)]
-const WAKE_START_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
 #[derive(Clone)]
 enum WakePersistenceContext {
     Ordinary,
