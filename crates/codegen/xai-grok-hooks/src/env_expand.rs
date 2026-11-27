@@ -19,8 +19,8 @@
 //! ## Asymmetry between `command` and `url`
 //!
 //! Load-time expansion in [`crate::config::parse_hook_file`] runs once, using a snapshot of process env at parse time.
-//! The HTTP runner does a second pass at runtime so plugin-injected vars arriving in `extra_env` after parsing (e.g. `CLAUDE_PLUGIN_ROOT`) resolve.
-//! The second pass also picks up mid-session changes to process env for URLs.
+//! Plugin-injected vars (e.g. `CLAUDE_PLUGIN_ROOT`) are in `extra_env` before that pass, so they resolve at load time.
+//! The HTTP runner does a second pass at runtime, which picks up mid-session changes to process env for URLs.
 //! Command paths are not value-expanded at spawn.
 //! Unix `sh -c` expands `$VAR` from the child env; Windows PowerShell rewrites known `$VAR` to `$env:VAR`.
 
@@ -307,7 +307,11 @@ mod tests {
     #[test]
     fn process_skip_leaves_runner_names() {
         assert_eq!(
-            crate::config::expand_env_skipping_runner_vars("${CLAUDE_PROJECT_DIR:-.}"),
+            expand_env_vars_with_process_skip(
+                "${CLAUDE_PROJECT_DIR:-.}",
+                &HashMap::new(),
+                crate::config::RUNNER_ALWAYS_SET_ENV,
+            ),
             "${CLAUDE_PROJECT_DIR:-.}"
         );
     }

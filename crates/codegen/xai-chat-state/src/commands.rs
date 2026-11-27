@@ -58,6 +58,9 @@ pub enum ChatStateCommand {
     /// Push a user message into the conversation.
     PushUserMessage { item: ConversationItem },
 
+    /// Insert a user message before the current prompt while that prompt is the last item; otherwise push it.
+    PushUserMessageBeforeCurrentPrompt { item: ConversationItem },
+
     /// Push an ordered batch of user messages into the conversation.
     PushUserMessagesBatch { items: Vec<ConversationItem> },
 
@@ -402,6 +405,9 @@ mod tests {
     fn command_variants_are_constructible() {
         // Mutations
         let _ = ChatStateCommand::PushUserMessage {
+            item: ConversationItem::user("hello"),
+        };
+        let _ = ChatStateCommand::PushUserMessageBeforeCurrentPrompt {
             item: ConversationItem::user("hello"),
         };
         let _ = ChatStateCommand::PushUserMessagesBatch {

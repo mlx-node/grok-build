@@ -1918,7 +1918,10 @@ pub(in crate::app::dispatch) fn handle_switch_model_complete(
                 agent.refresh_context_total();
                 let unchanged =
                     prev_model.as_ref() == Some(&model_id) && prev_effort == resolved_effort;
-                if !unchanged {
+                // `/model <name>` sets `current` before the RPC, so `prev_model` already equals `model_id`.
+                let switched_from_other =
+                    prev_model_id.as_ref().is_some_and(|prev| *prev != model_id);
+                if !unchanged || switched_from_other {
                     let msg = if let Some(eff) = resolved_effort {
                         format!("Switched to {display_name} ({eff} effort)")
                     } else {

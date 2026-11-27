@@ -1281,6 +1281,10 @@ pub async fn run(
 /// Best-effort: closed-pane EIO/BrokenPipe must not panic (`panic = "abort"`).
 /// TODO: extend beyond --minimal by rebuilding resume argv from launch flags (see screen_mode_relaunch)
 fn print_exit_resume_hint(info: &ExitInfo, max_width: usize, w: &mut impl Write) {
+    write_exit_resume_hint(info, max_width, &screen_mode_relaunch::resume_command(), w);
+}
+
+fn write_exit_resume_hint(info: &ExitInfo, max_width: usize, command: &str, w: &mut impl Write) {
     use crate::render::line_utils::truncate_str;
     let _ = writeln!(w);
     if let Some(summary) = &info.summary {
@@ -1299,9 +1303,9 @@ fn print_exit_resume_hint(info: &ExitInfo, max_width: usize, w: &mut impl Write)
     }
     let _ = writeln!(w, "Resume this session with:");
     if info.minimal {
-        let _ = writeln!(w, "  grok --minimal --resume {}", info.session_id);
+        let _ = writeln!(w, "  {command} --minimal --resume {}", info.session_id);
     } else {
-        let _ = writeln!(w, "  grok --resume {}", info.session_id);
+        let _ = writeln!(w, "  {command} --resume {}", info.session_id);
     }
 }
 /// Screen-mode relaunch failure fallback (same quit tail as plain resume).
@@ -2350,6 +2354,15 @@ mod tests {
         assert_eq!(
             String::from_utf8(buf).unwrap(),
             "\nResume this session with:\n  grok --resume sess-abc\n"
+        );
+    }
+    #[test]
+    fn exit_resume_hint_prints_the_launcher_command() {
+        let mut buf = Vec::new();
+        write_exit_resume_hint(&bare_exit_info("sess-abc", true), 80, "mlx agent", &mut buf);
+        assert_eq!(
+            String::from_utf8(buf).unwrap(),
+            "\nResume this session with:\n  mlx agent --minimal --resume sess-abc\n"
         );
     }
     #[test]

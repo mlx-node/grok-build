@@ -28,6 +28,12 @@ fn follow_up_config_mtime_ns() -> u64 {
         .unwrap_or(0)
 }
 
+/// The cached Steer answer while `config.toml` still has the mtime it was cached against (0 when missing).
+fn cached_follow_up_steer(cache: u8, cached_mtime_ns: u64, mtime_ns: u64) -> Option<bool> {
+    (cache != FOLLOW_UP_CACHE_UNKNOWN && mtime_ns == cached_mtime_ns)
+        .then_some(cache == FOLLOW_UP_CACHE_STEER)
+}
+
 /// Update the hot-path Steer cache (same-process tests / after a local write).
 pub fn set_follow_up_steer_cache(steer: bool) {
     FOLLOW_UP_STEER_CACHE.store(
@@ -48,8 +54,8 @@ pub async fn follow_up_steer_enabled() -> bool {
     let mtime = follow_up_config_mtime_ns();
     let cached_mtime = FOLLOW_UP_STEER_MTIME_NS.load(Ordering::Relaxed);
     let cached = FOLLOW_UP_STEER_CACHE.load(Ordering::Relaxed);
-    if cached != FOLLOW_UP_CACHE_UNKNOWN && mtime != 0 && mtime == cached_mtime {
-        return cached == FOLLOW_UP_CACHE_STEER;
+    if let Some(steer) = cached_follow_up_steer(cached, cached_mtime, mtime) {
+        return steer;
     }
     let root = match crate::config::load_effective_config() {
         Ok(root) => root,
@@ -505,4 +511,32 @@ pub async fn set_show_tips(value: bool) -> Result<()> {
 /// Restart-required: auto-update check fires once on startup.
 pub async fn set_auto_update(value: bool) -> Result<()> {
     update_config(|cfg| cfg.cli.auto_update = Some(value)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn steer_cache_holds_while_config_toml_is_missing() {
+        assert_eq!(
+            cached_follow_up_steer(FOLLOW_UP_CACHE_STEER, 0, 0),
+            Some(true)
+        );
+        assert_eq!(
+            cached_follow_up_steer(FOLLOW_UP_CACHE_QUEUE, 0, 0),
+            Some(false)
+        );
+        assert_eq!(
+            cached_follow_up_steer(FOLLOW_UP_CACHE_STEER, 0, 7),
+            None,
+            "config.toml appeared"
+        );
+        assert_eq!(
+            cached_follow_up_steer(FOLLOW_UP_CACHE_STEER, 7, 0),
+            None,
+            "config.toml was removed"
+        );
+        assert_eq!(cached_follow_up_steer(FOLLOW_UP_CACHE_UNKNOWN, 0, 0), None);
+    }
 }

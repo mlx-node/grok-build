@@ -239,14 +239,6 @@ pub const RUNNER_ALWAYS_SET_ENV: &[&str] = &[
     "CLAUDE_PROJECT_DIR",
 ];
 
-pub fn expand_env_skipping_runner_vars(input: &str) -> String {
-    crate::env_expand::expand_env_vars_with_process_skip(
-        input,
-        &HashMap::new(),
-        RUNNER_ALWAYS_SET_ENV,
-    )
-}
-
 impl HookSpec {
     /// Pinned by admin/server-managed policy and therefore not user-disableable; see [`HookProvenance::is_managed_policy`].
     pub fn is_managed_policy(&self) -> bool {
@@ -408,6 +400,7 @@ pub fn parse_hooks_from_value_with_dir(
             source_dir,
             error_path,
             provenance: HookProvenance::File,
+            injected_env: &HashMap::new(),
         },
     )
 }
@@ -454,6 +447,7 @@ pub fn parse_hooks_from_config_layers(
                 source_dir: &source_dir,
                 error_path,
                 provenance: layer.provenance(),
+                injected_env: &HashMap::new(),
             },
         );
         all_specs.extend(specs);
@@ -464,6 +458,16 @@ pub fn parse_hooks_from_config_layers(
 }
 
 pub fn parse_hook_file(content: &str, file_path: &Path) -> (Vec<HookSpec>, Vec<HookError>) {
+    parse_hook_file_with_env(content, file_path, &HashMap::new())
+}
+
+/// [`parse_hook_file`] with `injected_env` set on every spec over the handler's own `env`.
+/// The load-time expansion reads it before the process env, so a plugin's `${CLAUDE_PLUGIN_ROOT}` never takes the value grok was started with.
+pub fn parse_hook_file_with_env(
+    content: &str,
+    file_path: &Path,
+    injected_env: &HashMap<String, String>,
+) -> (Vec<HookSpec>, Vec<HookError>) {
     let specs = Vec::new();
     let mut errors = Vec::new();
 
@@ -515,6 +519,7 @@ pub fn parse_hook_file(content: &str, file_path: &Path) -> (Vec<HookSpec>, Vec<H
             source_dir: &source_dir,
             error_path: file_path,
             provenance: HookProvenance::File,
+            injected_env,
         },
     )
 }
@@ -604,6 +609,8 @@ struct SpecContext<'a> {
     source_dir: &'a Path,
     error_path: &'a Path,
     provenance: HookProvenance,
+    /// Set over each handler's `env` (see [`parse_hook_file_with_env`]).
+    injected_env: &'a HashMap<String, String>,
 }
 
 /// Build one [`HookSpec`] from a handler entry, or the [`HookError`] preventing it.
@@ -630,6 +637,11 @@ fn build_one_spec(
 
     let mut extra_env: HashMap<String, String> = handler.env;
     strip_reserved_env_keys(&mut extra_env, &name, ctx.error_path);
+    extra_env.extend(
+        ctx.injected_env
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
 
     let handler_type = match handler.handler_type.parse::<HandlerType>() {
         Ok(ht) => ht,
@@ -1507,6 +1519,80 @@ mod tests {
                 Some(format!("https://${{{key}}}/check").as_str())
             );
         });
+    }
+
+    fn with_env_vars<R>(vars: &[(&str, &str)], f: impl FnOnce() -> R) -> R {
+        match vars.split_first() {
+            Some(((name, value), rest)) => {
+                with_env_var(name, Some(value), || with_env_vars(rest, f))
+            }
+            None => f(),
+        }
+    }
+
+    /// grok started from a Claude Code shell has `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA` of its own; a plugin hook must not take them.
+    #[test]
+    fn parse_hook_file_with_env_expands_injected_names_before_the_process_env() {
+        let injected: HashMap<String, String> = [
+            ("CLAUDE_PLUGIN_ROOT", "/plugin/root"),
+            ("GROK_PLUGIN_ROOT", "/plugin/root"),
+            ("CLAUDE_PLUGIN_DATA", "/plugin/data"),
+            ("GROK_PLUGIN_DATA", "/plugin/data"),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect();
+        let ambient = [
+            ("CLAUDE_PLUGIN_ROOT", "/ambient/root"),
+            ("GROK_PLUGIN_ROOT", "/ambient/root"),
+            ("CLAUDE_PLUGIN_DATA", "/ambient/data"),
+            ("GROK_PLUGIN_DATA", "/ambient/data"),
+        ];
+        let json = r#"{
+            "hooks": {
+                "PreToolUse": [
+                    { "hooks": [
+                        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/a.sh $GROK_PLUGIN_ROOT/b.sh" },
+                        {
+                            "type": "command",
+                            "command": "${CLAUDE_PLUGIN_DATA}/c $GROK_PLUGIN_DATA/d",
+                            "env": { "CLAUDE_PLUGIN_DATA": "/user/data" }
+                        },
+                        { "type": "http", "url": "https://hooks.example.com/check?root=${CLAUDE_PLUGIN_ROOT}" }
+                    ] }
+                ]
+            }
+        }"#;
+
+        let (specs, errors) = with_env_vars(&ambient, || {
+            parse_hook_file_with_env(json, Path::new("/tmp/plugin.json"), &injected)
+        });
+
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let commands: Vec<Option<PathBuf>> = specs.iter().map(|s| s.command.clone()).collect();
+        assert_eq!(
+            commands,
+            vec![
+                Some(PathBuf::from("/plugin/root/a.sh /plugin/root/b.sh")),
+                Some(PathBuf::from("/plugin/data/c /plugin/data/d")),
+                None,
+            ]
+        );
+        assert_eq!(
+            specs.get(2).and_then(|s| s.url.as_deref()),
+            Some("https://hooks.example.com/check?root=/plugin/root")
+        );
+        assert_eq!(
+            specs
+                .get(1)
+                .and_then(|s| s.extra_env.get("CLAUDE_PLUGIN_DATA"))
+                .map(String::as_str),
+            Some("/plugin/data")
+        );
+        assert_eq!(
+            specs.first().and_then(|s| s.command_raw.as_deref()),
+            Some("${CLAUDE_PLUGIN_ROOT}/a.sh $GROK_PLUGIN_ROOT/b.sh")
+        );
     }
 
     #[test]

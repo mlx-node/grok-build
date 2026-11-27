@@ -175,15 +175,40 @@ pub(crate) fn screen_mode_env_value(want_minimal: bool) -> &'static str {
     }
 }
 
+/// Command that relaunches this client, set by a wrapping launcher (`mlx agent`).
+/// The resume hints print it in place of `grok`, which the wrapper does not put on `PATH`.
+pub(crate) const GROK_RESUME_COMMAND_ENV: &str = "GROK_RESUME_COMMAND";
+
+/// The command the resume hints print: [`GROK_RESUME_COMMAND_ENV`] when set and not blank, else `grok`.
+pub(crate) fn resume_command() -> String {
+    resume_command_from(std::env::var(GROK_RESUME_COMMAND_ENV).ok().as_deref())
+}
+
+fn resume_command_from(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|command| !command.is_empty())
+        .unwrap_or("grok")
+        .to_string()
+}
+
 /// Pasteable shell command when auto re-exec fails (env, flag, and `--resume`).
 pub(crate) fn screen_mode_relaunch_resume_hint(session_id: &str, want_minimal: bool) -> String {
+    screen_mode_relaunch_resume_hint_with(&resume_command(), session_id, want_minimal)
+}
+
+fn screen_mode_relaunch_resume_hint_with(
+    command: &str,
+    session_id: &str,
+    want_minimal: bool,
+) -> String {
     let mode = screen_mode_env_value(want_minimal);
     let flag = if want_minimal {
         "--minimal"
     } else {
         "--fullscreen"
     };
-    format!("{GROK_SCREEN_MODE_ENV}={mode} grok {flag} --resume {session_id}")
+    format!("{GROK_SCREEN_MODE_ENV}={mode} {command} {flag} --resume {session_id}")
 }
 
 /// Replace the current process with a relaunch into the requested screen mode.
@@ -748,6 +773,17 @@ mod tests {
         assert_eq!(
             screen_mode_relaunch_resume_hint("abc-sid", true),
             "GROK_SCREEN_MODE=minimal grok --minimal --resume abc-sid"
+        );
+    }
+
+    #[test]
+    fn resume_command_uses_the_launcher_override() {
+        assert_eq!(resume_command_from(None), "grok");
+        assert_eq!(resume_command_from(Some("  ")), "grok");
+        assert_eq!(resume_command_from(Some("mlx agent")), "mlx agent");
+        assert_eq!(
+            screen_mode_relaunch_resume_hint_with("mlx agent", "abc-sid", true),
+            "GROK_SCREEN_MODE=minimal mlx agent --minimal --resume abc-sid"
         );
     }
 

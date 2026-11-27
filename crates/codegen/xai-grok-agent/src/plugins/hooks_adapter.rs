@@ -1,14 +1,13 @@
 //! Plugin hooks adapter: pre-filter plugin hook JSON, then feed it to `xai-grok-hooks`' parser and inject plugin env vars.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
-use xai_grok_hooks::config::{HookProvenance, HookSpec, parse_hook_file};
+use xai_grok_hooks::config::{HookProvenance, HookSpec, parse_hook_file_with_env};
 use xai_grok_hooks::discovery::HookRegistry;
 use xai_grok_hooks::event::HookEventName;
 
-use super::manifest::substitute_env_vars;
 use super::registry::{LoadedPlugin, PluginRegistry};
 
 /// Read, pre-filter, and parse a plugin's hooks file, then inject the plugin env vars.
@@ -50,7 +49,7 @@ fn parse_plugin_hooks_from_value(
     plugin_data: &str,
 ) -> (Vec<HookSpec>, Vec<String>) {
     let content = serde_json::to_string(value).unwrap_or_default();
-    // Use a synthetic path for parse_hook_file's source_dir (resolves relative commands).
+    // Use a synthetic path for parse_hook_file_with_env's source_dir (resolves relative commands).
     let synthetic_path = Path::new(plugin_root).join("plugin.json");
     let (specs, warnings) = process_hooks_content(
         &content,
@@ -145,7 +144,7 @@ pub fn replace_plugin_hooks(
 
 /// Shared processing pipeline for plugin hooks (file-based or inline).
 ///
-/// Pre-filters unsupported events, parses via `parse_hook_file()`, injects plugin env vars, and namespaces hook names.
+/// Pre-filters unsupported events, parses via `parse_hook_file_with_env()` with the plugin env vars, and namespaces hook names.
 fn process_hooks_content(
     content: &str,
     source_path: &Path,
@@ -162,13 +161,8 @@ fn process_hooks_content(
         ));
     }
 
-    let (mut specs, parse_errors) = parse_hook_file(&filtered_content, source_path);
-
-    for err in &parse_errors {
-        warnings.push(format!("plugin {plugin_name}: {err}"));
-    }
-
     // Native `GROK_PLUGIN_*` vars plus their vendor-compat aliases.
+    // Plugin-owned keys always win over user-declared `env`, or a plugin author could repoint the plugin root and break the contract
     let plugin_env: HashMap<String, String> = HashMap::from([
         ("GROK_PLUGIN_ROOT".to_string(), plugin_root.to_string()),
         ("CLAUDE_PLUGIN_ROOT".to_string(), plugin_root.to_string()),
@@ -176,11 +170,14 @@ fn process_hooks_content(
         ("CLAUDE_PLUGIN_DATA".to_string(), plugin_data.to_string()),
     ]);
 
+    let (mut specs, parse_errors) =
+        parse_hook_file_with_env(&filtered_content, source_path, &plugin_env);
+
+    for err in &parse_errors {
+        warnings.push(format!("plugin {plugin_name}: {err}"));
+    }
+
     for spec in &mut specs {
-        // Plugin-owned keys always win over user-declared `env`, or a plugin author could repoint the plugin root and break the contract
-        for (k, v) in &plugin_env {
-            spec.extra_env.insert(k.clone(), v.clone());
-        }
         spec.layer = HookProvenance::Plugin;
         spec.name = format!(
             "{}{}/{}",
@@ -188,15 +185,6 @@ fn process_hooks_content(
             plugin_name,
             spec.name
         );
-        // Resolve plugin path placeholders at load time (mirrors managed_mcp) so the command works regardless of the runner's spawn branch
-        if let Some(cmd) = &spec.command {
-            let cmd_str = cmd.to_string_lossy();
-            let substituted = substitute_env_vars(&cmd_str, plugin_root, plugin_data);
-            let expanded = xai_grok_hooks::config::expand_env_skipping_runner_vars(&substituted);
-            if expanded != cmd_str {
-                spec.command = Some(PathBuf::from(expanded));
-            }
-        }
     }
 
     (specs, warnings)
@@ -208,7 +196,7 @@ fn process_hooks_content(
 fn prefilter_unsupported_events(json_content: &str) -> (String, Vec<String>) {
     let mut value: serde_json::Value = match serde_json::from_str(json_content) {
         Ok(v) => v,
-        // Invalid JSON: let parse_hook_file report it.
+        // Invalid JSON: let parse_hook_file_with_env report it.
         Err(_) => return (json_content.to_string(), vec![]),
     };
 
@@ -236,6 +224,7 @@ fn prefilter_unsupported_events(json_content: &str) -> (String, Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use xai_grok_hooks::config::parse_hook_file;
 
     /// Test-only lookup: `["k"]` would panic on a missing key, so index through a pointer path.
     fn jp<'a>(v: &'a serde_json::Value, path: &str) -> &'a serde_json::Value {

@@ -11,7 +11,6 @@ use crate::types::resources::SessionFolder;
 use crate::types::tool::{ToolKind, ToolNamespace};
 
 pub const SEND_FEEDBACK_TOOL_NAME: &str = "send_feedback";
-const SUCCESS_MESSAGE: &str = "Local feedback draft saved.";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct SendFeedbackInput {
@@ -92,13 +91,9 @@ impl From<SendFeedbackOutput> for crate::types::output::ToolOutput {
 #[derive(Debug, Default)]
 pub struct SendFeedbackTool;
 
-/// Absolute drafts file for a session folder. Tool descriptions only.
-/// An empty folder (session-agnostic finalize, e.g. the workspace manifest)
-/// yields an empty path so the description omits the sentence.
-pub fn drafts_file_path(session_folder: &std::path::Path) -> String {
-    if session_folder.as_os_str().is_empty() {
-        return String::new();
-    }
+/// Named in the tool result, never in the description: every session shares the description,
+/// so a per-session path there splits the prompt cache between sessions.
+fn drafts_file_path(session_folder: &std::path::Path) -> String {
     session_folder
         .join(xai_grok_feedback::FEEDBACK_DRAFTS_FILENAME)
         .display()
@@ -133,9 +128,6 @@ ${%- endif %}\n\n\
 # Confirmation\n\n\
 After drafting feedback and ending your turn, tell the user the draft is saved locally for this session. In the Grok CLI they review and send it by typing `/feedback` and opening the Drafts tab; from any other client, have them resume this session in the Grok CLI first.\n\n\
 # Misc\n\n\
-${%- if feedback_drafts_path %}\n\
-This session's drafts file is ${{ feedback_drafts_path }}.\n\
-${%- endif %}\n\
 If the user's feedback can be answered from the docs (for example UI element locations or setup), read the Grok Build docs locally or online and answer alongside the created draft.\n\n\
 ",
     );
@@ -273,6 +265,7 @@ impl xai_tool_runtime::Tool for SendFeedbackTool {
             .filter(|id| !id.is_empty())
             .map(|id| FeedbackDraftId::from(id.to_owned()));
         let input = FeedbackDraftInput::from(input.without_draft_id_in_text());
+        let drafts_file = drafts_file_path(&session_folder);
         let result = tokio::task::spawn_blocking(move || {
             let store = FeedbackDraftStore::new(session_folder);
             match draft_id {
@@ -295,7 +288,7 @@ impl xai_tool_runtime::Tool for SendFeedbackTool {
         map_append_result(result)?;
 
         Ok(SendFeedbackOutput {
-            message: SUCCESS_MESSAGE.to_owned(),
+            message: format!("Local feedback draft saved to {drafts_file}."),
         })
     }
 }

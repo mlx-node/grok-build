@@ -148,6 +148,92 @@ async fn push_user_messages_batch_appends_and_persists_in_order() {
     );
 }
 
+fn prompt(text: &str, prompt_index: usize) -> ConversationItem {
+    let mut item = ConversationItem::user(text);
+    item.set_prompt_index(prompt_index);
+    item
+}
+
+fn texts(items: &[ConversationItem]) -> Vec<String> {
+    items.iter().map(ConversationItem::text_content).collect()
+}
+
+#[tokio::test]
+async fn push_before_current_prompt_lands_ahead_of_it_in_memory_and_on_disk() {
+    let mut h = TestHarness::with_conversation(vec![ConversationItem::user("prefix")]);
+    h.handle.increment_prompt_index();
+    h.handle.push_user_message(prompt("query", 0));
+    let before = h.handle.get_estimated_total_tokens().await;
+    h.drain_persistence();
+
+    let reminder = ConversationItem::system_reminder("reminder");
+    let added = super::state::estimate_item_tokens(&reminder);
+    h.handle.push_user_message_before_current_prompt(reminder);
+
+    let conversation = h.handle.get_conversation().await;
+    assert_eq!(texts(&conversation), ["prefix", "reminder", "query"]);
+    let records = h.drain_persistence();
+    let [PersistenceRecord::ReplaceHistory(stored)] = records.as_slice() else {
+        panic!("expected one history rewrite: {records:?}");
+    };
+    assert_eq!(texts(stored), ["prefix", "reminder", "query"]);
+    assert_eq!(h.handle.get_estimated_total_tokens().await, before + added);
+}
+
+#[tokio::test]
+async fn push_before_current_prompt_appends_unless_the_current_prompt_is_last() {
+    let call = xai_grok_sampling_types::ToolCall {
+        id: "call-1".into(),
+        name: "read_file".to_string(),
+        arguments: "{}".into(),
+    };
+    let cases = [
+        (
+            "a tool round answers the prompt",
+            vec![
+                prompt("query", 0),
+                ConversationItem::assistant_tool_calls(vec![call]),
+                ConversationItem::tool_result("call-1", "result"),
+            ],
+            1,
+        ),
+        (
+            "a reminder follows the prompt",
+            vec![
+                prompt("query", 0),
+                ConversationItem::system_reminder("note"),
+            ],
+            1,
+        ),
+        (
+            "the last prompt is an earlier turn's",
+            vec![prompt("query", 0)],
+            2,
+        ),
+    ];
+    for (case, items, prompts_started) in cases {
+        let mut h = TestHarness::with_conversation(items.clone());
+        for _ in 0..prompts_started {
+            h.handle.increment_prompt_index();
+        }
+        h.handle
+            .push_user_message_before_current_prompt(ConversationItem::system_reminder("reminder"));
+
+        let mut expected = texts(&items);
+        expected.push("reminder".to_string());
+        assert_eq!(
+            texts(&h.handle.get_conversation().await),
+            expected,
+            "{case}"
+        );
+        let records = h.drain_persistence();
+        assert!(
+            matches!(records.as_slice(), [PersistenceRecord::Message(item)] if item.text_content() == "reminder"),
+            "{case}: {records:?}"
+        );
+    }
+}
+
 #[test]
 fn user_messages_batch_uses_one_command() {
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel();

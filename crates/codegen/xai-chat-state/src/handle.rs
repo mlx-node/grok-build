@@ -53,6 +53,13 @@ impl ChatStateHandle {
         let _ = self.cmd_tx.send(ChatStateCommand::PushUserMessage { item });
     }
 
+    /// Insert a user message before the current prompt while that prompt is the last item; otherwise push it.
+    pub fn push_user_message_before_current_prompt(&self, item: ConversationItem) {
+        let _ = self
+            .cmd_tx
+            .send(ChatStateCommand::PushUserMessageBeforeCurrentPrompt { item });
+    }
+
     /// Enqueue an ordered batch of user messages as one actor command.
     pub fn try_push_user_messages_batch(
         &self,

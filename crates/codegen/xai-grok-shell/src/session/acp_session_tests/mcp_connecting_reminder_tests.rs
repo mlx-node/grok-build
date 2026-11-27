@@ -435,3 +435,144 @@ fn progressive_prompt_mid_handshake_still_announces_connecting() {
         prompt_task.abort();
     });
 }
+
+fn spawn_hi_prompt(
+    actor: &std::sync::Arc<SessionActor>,
+    prompt_id: &'static str,
+    ack_tx: tokio::sync::oneshot::Sender<()>,
+) -> tokio::task::JoinHandle<()> {
+    let actor = actor.clone();
+    tokio::task::spawn_local(async move {
+        let _ = actor
+            .handle_prompt(
+                prompt_id,
+                vec![acp::ContentBlock::Text(acp::TextContent::new(
+                    "hi".to_string(),
+                ))],
+                PromptMode::Agent,
+                None,
+                None,
+                None,
+                None,
+                /* verbatim */ false,
+                /* send_now */ false,
+                None,
+                Some(ack_tx),
+                None,
+            )
+            .await;
+    })
+}
+
+fn assert_reminder_right_before_the_prompt(conversation: &[ConversationItem], reminder: &str) {
+    let [.., before, ConversationItem::User(prompt)] = conversation else {
+        panic!("too short: {}", conversation_text(conversation));
+    };
+    assert_eq!(
+        prompt.prompt_index,
+        Some(0),
+        "the prompt must stay the last item: {}",
+        conversation_text(conversation)
+    );
+    assert!(
+        before.text_content().contains(reminder),
+        "{reminder:?} must sit right before the prompt: {}",
+        conversation_text(conversation)
+    );
+}
+
+/// The handshake is still running when tool prep ends, which is after the prompt push.
+#[test]
+fn connecting_reminder_after_the_prompt_push_lands_before_the_prompt() {
+    block_on_session_turn(|| async {
+        let notify = std::sync::Arc::new(tokio::sync::Notify::new());
+        let actor = actor_with_persistence_drain_and_sampler(
+            xai_grok_sampler::SamplerHandle::notify_on_submit(std::sync::Arc::clone(&notify)),
+        )
+        .await;
+        mark_mid_handshake(&actor, "slow").await;
+        actor.mcp_strategy.set(McpInitStrategy::Progressive);
+        let submitted = notify.notified();
+        tokio::pin!(submitted);
+        submitted.as_mut().enable();
+
+        let (ack_tx, _ack_rx) = tokio::sync::oneshot::channel();
+        let prompt_task = spawn_hi_prompt(&actor, "p2-connecting", ack_tx);
+        tokio::time::timeout(std::time::Duration::from_secs(5), submitted)
+            .await
+            .expect("first sampling submit");
+
+        let conversation = actor.chat_state_handle.get_conversation().await;
+        assert_reminder_right_before_the_prompt(&conversation, "MCP servers currently connecting");
+        prompt_task.abort();
+    });
+}
+
+/// The server connects while tool prep waits, after the prompt push.
+/// Connected fingerprints stay latched through a rewind, so the rewind must keep the announcement.
+#[test]
+fn mcp_reminder_ready_after_the_prompt_push_lands_before_the_prompt() {
+    use crate::session::tool_index::{ServerMetadata, ToolMetadata};
+    block_on_session_turn(|| async {
+        let notify = std::sync::Arc::new(tokio::sync::Notify::new());
+        let actor = actor_with_persistence_drain_and_sampler(
+            xai_grok_sampler::SamplerHandle::notify_on_submit(std::sync::Arc::clone(&notify)),
+        )
+        .await;
+        mark_mid_handshake(&actor, "slow").await;
+        actor.mcp_strategy.set(McpInitStrategy::Blocking);
+        actor
+            .mcp_reminder_dirty
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let submitted = notify.notified();
+        tokio::pin!(submitted);
+        submitted.as_mut().enable();
+
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        let prompt_task = spawn_hi_prompt(&actor, "p2-ready", ack_tx);
+        assert!(ack_rx.await.is_ok());
+        assert!(
+            !conversation_text(&actor.chat_state_handle.get_conversation().await)
+                .contains("MCP server"),
+            "the turn-start check must defer while the handshake runs"
+        );
+        {
+            let mut snapshot = actor.tool_metadata_snapshot.lock().unwrap();
+            snapshot.tools = vec![ToolMetadata {
+                qualified_name: "slow__echo".to_string(),
+                server_name: "slow".to_string(),
+                tool_name: "echo".to_string(),
+                description: "echo description".to_string(),
+                parameters: vec!["arg".to_string()],
+                input_schema: serde_json::json!({"type": "object"}),
+            }];
+            snapshot.servers = vec![ServerMetadata {
+                name: "slow".to_string(),
+                description: None,
+            }];
+            snapshot.mcp_initialized = true;
+        }
+        {
+            let mut state = actor.mcp_state.lock().await;
+            state.mark_server_ready("slow");
+            state.finish_init();
+            state.complete_init();
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), submitted)
+            .await
+            .expect("first sampling submit");
+
+        let conversation = actor.chat_state_handle.get_conversation().await;
+        assert_reminder_right_before_the_prompt(&conversation, "MCP server connected");
+        let kept = xai_grok_sampling_types::conversation_truncate_for_prompt(&conversation, 0);
+        assert!(
+            conversation
+                .iter()
+                .take(kept)
+                .any(|item| item.text_content().contains("MCP server connected")),
+            "a rewind of the turn must keep the announcement: {}",
+            conversation_text(&conversation)
+        );
+        prompt_task.abort();
+    });
+}

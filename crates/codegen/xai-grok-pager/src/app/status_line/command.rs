@@ -117,7 +117,7 @@ async fn pump(
     let mut stderr = child.stderr.take();
     let mut buf = Vec::new();
 
-    let status = {
+    let (status, unread) = {
         // Alongside the reads: a script that fills its stdout before reading stdin would block a write that ran first
         // Dropping the handle gives it EOF
         let write_in = async {
@@ -183,7 +183,7 @@ async fn pump(
                     reading = false;
                     match read {
                         // The cap ends the run: a script still writing will never exit, so there is no status coming to wait for
-                        Ok(read) if read as u64 > MAX_COMMAND_OUTPUT_BYTES => break None,
+                        Ok(read) if read as u64 > MAX_COMMAND_OUTPUT_BYTES => break (None, false),
                         Ok(_) => {}
                         Err(error) => {
                             // What arrived still paints; without this a truncated row and a short one are indistinguishable
@@ -191,16 +191,36 @@ async fn pump(
                         }
                     }
                 }
-                waited = child.wait() => break Some(waited.map_err(RunError::Wait)?),
+                waited = child.wait() => break (Some(waited.map_err(RunError::Wait)?), reading),
             }
         }
     };
+    // The wait polls the child directly, so it can see the exit before the reactor reports the output written ahead of it
+    #[cfg(unix)]
+    if unread && let Some(out) = stdout.as_ref() {
+        take_buffered_output(out, &mut buf);
+    }
+    #[cfg(not(unix))]
+    let _ = unread;
 
     if buf.len() as u64 > MAX_COMMAND_OUTPUT_BYTES {
         buf.truncate(MAX_COMMAND_OUTPUT_BYTES as usize);
         return Ok((None, buf));
     }
     Ok((status, buf))
+}
+
+/// Reads what the pipe holds now, without waiting on writers the script left behind.
+#[cfg(unix)]
+fn take_buffered_output(out: &tokio::process::ChildStdout, buf: &mut Vec<u8>) {
+    use std::io::Read;
+    use std::os::fd::AsFd;
+    // The duplicate shares the pipe's non-blocking flag: an empty pipe ends the read with `WouldBlock`, and what it read stays in `buf`
+    let Ok(fd) = out.as_fd().try_clone_to_owned() else {
+        return;
+    };
+    let room = MAX_COMMAND_OUTPUT_BYTES.saturating_sub(buf.len() as u64);
+    let _ = std::fs::File::from(fd).take(room).read_to_end(buf);
 }
 
 /// Whether the kernel refused to execute the file at all, which is what an executable script with no `#!` gets.
