@@ -1,5 +1,6 @@
 use super::system_prompt::{
-    RequestedSystemPrompt, read_session_or_init_meta_str, requested_system_prompt,
+    RequestedSystemPrompt, append_human_rules, read_session_or_init_meta_str,
+    requested_system_prompt,
 };
 use super::test_hooks::{AttachPause, with_pause_at};
 use super::*;
@@ -1043,6 +1044,18 @@ fn blank_override_is_no_override() {
     }
 }
 #[test]
+fn append_human_rules_wraps_the_rules_block() {
+    assert_eq!(
+        append_human_rules("A", "r"),
+        "A\n\n<human_rules>\nr\n</human_rules>"
+    );
+    let init = serde_json::json!({ "rules": "r" });
+    assert_eq!(
+        build_spawn_system_prompt(None, init.as_object(), "A"),
+        append_human_rules("A", "r")
+    );
+}
+#[test]
 fn enqueue_replace_system_prompt_override_sends_when_present() {
     use crate::session::SessionCommand;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1285,6 +1298,9 @@ pub(super) fn make_test_handle(
         session_default_agent_profile: None,
         allowed_subagent_types: None,
         hook_registry: None,
+        plugin_registry: None,
+        human_rules: None,
+        workflow_launch_tx: tokio::sync::mpsc::unbounded_channel().0,
         workspace_ops: xai_grok_workspace::WorkspaceOps::for_test(),
         terminal_backend: None,
         tools_notification_handle: None,
@@ -2377,6 +2393,91 @@ async fn session_usage_unknown_session_is_resource_not_found() {
         err.code,
         acp::Error::resource_not_found(None::<String>).code
     );
+}
+#[tokio::test(flavor = "current_thread")]
+async fn workflows_stop_route_stops_the_run_through_the_sessions_request_service() {
+    use crate::session::workflow::manager::WorkflowManager;
+    use crate::session::workflow::request_service::{RequestServiceOptions, spawn_request_service};
+    use crate::session::workflow::tracker::WorkflowRunStatus;
+    let agent = build_minimal_agent_for_tests();
+    let (manager, tracker) = WorkflowManager::test_bundle();
+    tracker.lock().start_run(
+        "wf_route".to_owned(),
+        "deep-research".into(),
+        "obj".into(),
+        Vec::new(),
+        None,
+        None,
+    );
+    let (_done_tx, done_rx) = tokio::sync::oneshot::channel();
+    manager
+        .lock()
+        .await
+        .test_insert_active_run("wf_route".to_owned(), done_rx);
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    spawn_request_service(
+        rx,
+        RequestServiceOptions {
+            manager,
+            cwd: std::env::temp_dir(),
+            session_dir: std::env::temp_dir(),
+            enabled: true,
+        },
+    );
+    let sid = acp::SessionId::new("wf-stop-sess");
+    let mut handle = make_test_handle("test-model", false, None);
+    handle.info.id = sid.clone();
+    handle.workflow_launch_tx = tx;
+    agent.insert_resident(&sid, handle);
+    let stop = |session_id: &str| {
+        acp::ExtRequest::new(
+            "x.ai/workflows/stop",
+            serde_json::value::to_raw_value(
+                &serde_json::json!({ "sessionId": session_id, "runId": "wf_route" }),
+            )
+            .unwrap()
+            .into(),
+        )
+    };
+    let resp = acp::Agent::ext_method(&agent, stop("wf-stop-sess"))
+        .await
+        .expect("stop answers with a JSON-RPC success");
+    let answer: serde_json::Value = serde_json::from_str(resp.0.get()).unwrap();
+    assert_eq!(
+        answer,
+        serde_json::json!({ "outcome": "stopped", "runId": "wf_route", "name": "deep-research" })
+    );
+    assert_eq!(
+        tracker.lock().get("wf_route").unwrap().status,
+        WorkflowRunStatus::Cancelled
+    );
+    let err = acp::Agent::ext_method(&agent, stop("no-such-session"))
+        .await
+        .expect_err("unknown session is a JSON-RPC error");
+    assert_eq!(err.code, acp::Error::invalid_params().code);
+}
+#[test]
+#[serial_test::serial]
+fn initialize_advertises_plugin_dirs_and_workflow_control() {
+    let grok_home = tempfile::tempdir().unwrap();
+    let _env = xai_grok_test_support::EnvGuard::set("GROK_HOME", grok_home.path());
+    run_local_for_bridge_test(|| async {
+        let agent = build_minimal_agent_for_tests();
+        let init = acp::InitializeRequest::new(acp::ProtocolVersion::V1).client_capabilities(
+            acp::ClientCapabilities::new()
+                .fs(acp::FileSystemCapabilities::new())
+                .terminal(false),
+        );
+        let resp = acp::Agent::initialize(&agent, init)
+            .await
+            .expect("initialize succeeds");
+        let meta = resp.meta.expect("initialize result carries _meta");
+        assert_eq!(meta.get("x.ai/pluginDirs"), Some(&serde_json::json!(true)));
+        assert_eq!(
+            meta.get("x.ai/workflowControl"),
+            Some(&serde_json::json!(true))
+        );
+    });
 }
 #[tokio::test(flavor = "current_thread")]
 async fn session_usage_dead_chat_state_actor_fails_closed() {

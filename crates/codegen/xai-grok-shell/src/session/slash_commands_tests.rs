@@ -1666,6 +1666,7 @@ fn listing(name: &str) -> crate::session::workflow::registry::WorkflowListing {
         when_to_use: None,
         source: "project",
         path: Some(format!(".grok/workflows/{name}.rhai")),
+        args_hint: None,
     }
 }
 
@@ -1677,6 +1678,7 @@ fn same_named_builtin_projects_workflow_metadata_without_replacing_command() {
         when_to_use: None,
         source: "builtin",
         path: None,
+        args_hint: None,
     };
     let commands = available_commands(&[], all_gated(), std::slice::from_ref(&workflow));
     let matching: Vec<_> = commands

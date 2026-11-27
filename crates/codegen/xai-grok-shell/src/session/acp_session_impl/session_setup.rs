@@ -49,6 +49,20 @@ impl SessionActor {
             .replace_conversation(messages.clone());
         persist_chat_history_jsonl_sync(&self.session_info, &messages);
     }
+    /// A fresh workflow child gets the skills listing `initialize` gives a main session.
+    /// The clear is required: the tool registry's finalize already took the seed's pending listing.
+    pub(super) async fn start_workflow_child(&self) {
+        let bridge = self.agent.borrow().tool_bridge().clone();
+        bridge.on_skill_discovery_clear().await;
+        if let Some(item) = bridge
+            .apply_pending_skill_update()
+            .await
+            .and_then(|effects| self.wrap_skill_reminder(&effects))
+        {
+            self.chat_state_handle.push_user_message(item);
+            self.persist_announcement_state().await;
+        }
+    }
     /// Idempotent: strips any existing baseline skill reminder before injecting.
     /// `rewrite_zero_turn_prefix` keeps the inherited reminder unless the target renders inline.
     /// Without the strip, a rebuild from one reminder-using agent to another would list the baseline twice.

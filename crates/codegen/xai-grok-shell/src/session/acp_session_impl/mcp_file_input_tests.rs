@@ -1333,3 +1333,100 @@ async fn source_and_resolved_approval_are_distinct_and_reject_prevents_send() {
         })
         .await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn child_source_read_ask_names_the_child_requester() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            use xai_grok_workspace::permission::types::{
+                PatternMode, PermissionConfig, PermissionRule, RuleAction, ToolFilter,
+            };
+            let (mut actor, fs, remote, _gateway) = fixture(false).await;
+            actor.startup_hints.is_subagent = true;
+            actor.startup_hints.subagent_label = Some("probe-0".to_owned());
+            actor.startup_hints.workflow_run_id = Some("wf_t".to_owned());
+            fs.files
+                .set_file(
+                    "/tmp/mcp-source.json",
+                    br#"{"tool_name":"fixture__update","tool_input":{"body":"loaded"}}"#,
+                )
+                .await;
+            let (gateway, mut requests) = tokio::sync::mpsc::unbounded_channel();
+            let (permission, _events) = xai_grok_workspace::permission::spawn_permission_manager(
+                acp::SessionId::new("parent-session"),
+                xai_acp_lib::AcpAgentGatewaySender::new(gateway),
+                xai_grok_paths::AbsPathBuf::new(PathBuf::from("/tmp")).unwrap(),
+                xai_grok_workspace::permission::ClientType::Desktop,
+                Some(PermissionConfig::new(vec![PermissionRule {
+                    action: RuleAction::Ask,
+                    tool: ToolFilter::Any,
+                    pattern: None,
+                    pattern_mode: PatternMode::Glob,
+                }])),
+                vec![],
+                vec![],
+                false,
+                None,
+            );
+            actor.permissions = permission;
+            let prompts = Arc::new(parking_lot::Mutex::new(vec![]));
+            let captured = prompts.clone();
+            let responder =
+                tokio_util::task::AbortOnDropHandle::new(tokio::task::spawn_local(async move {
+                    while let Some(message) = requests.recv().await {
+                        if let xai_acp_lib::AcpClientMessage::RequestPermission(args) = message {
+                            let first = captured.lock().is_empty();
+                            captured.lock().push((
+                                args.request.session_id.0.to_string(),
+                                args.request.tool_call.fields.title.clone(),
+                                args.request.meta.clone(),
+                            ));
+                            let outcome = acp::RequestPermissionOutcome::Selected(
+                                acp::SelectedPermissionOutcome::new(acp::PermissionOptionId::new(
+                                    if first { "allow-once" } else { "reject-once" },
+                                )),
+                            );
+                            args.response_tx
+                                .send(Ok(acp::RequestPermissionResponse::new(outcome)))
+                                .unwrap();
+                        }
+                    }
+                }));
+            assert!(matches!(
+                prepare_call(&actor, call(json!({"file":"/tmp/mcp-source.json"}))).await,
+                Err(ToolLoop::PermissionReject { .. })
+            ));
+            let requester = json!({
+                "sessionId": actor.session_info.id.0.to_string(),
+                "label": "probe-0",
+                "runId": "wf_t",
+                "cwd": actor.session_info.cwd,
+            });
+            let prompts = prompts.lock();
+            assert_eq!(2, prompts.len());
+            let (source_session, source_title, source_meta) = prompts.first().unwrap();
+            assert!(
+                source_title.as_deref().unwrap().contains("Read MCP source"),
+                "the first ask is the source Read"
+            );
+            assert_eq!("parent-session", source_session);
+            assert_eq!(
+                Some(&requester),
+                source_meta
+                    .as_ref()
+                    .and_then(|meta| meta.get(xai_grok_workspace::permission::REQUESTER_META_KEY)),
+                "a child's MCP source Read ask must name the child"
+            );
+            let (_, _, target_meta) = prompts.last().unwrap();
+            assert_eq!(
+                Some(&requester),
+                target_meta
+                    .as_ref()
+                    .and_then(|meta| meta.get(xai_grok_workspace::permission::REQUESTER_META_KEY)),
+                "the resolved MCP call ask names the same child"
+            );
+            assert_eq!(0, remote.calls.lock().len());
+            drop(responder);
+        })
+        .await;
+}

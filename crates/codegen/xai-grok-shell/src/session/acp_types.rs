@@ -614,6 +614,12 @@ pub struct StartupHints {
     /// It matches the `SubagentStart`/`SubagentStop` events the parent emits, which also key off the task type, not the resolved agent name.
     #[serde(default)]
     pub subagent_type: Option<String>,
+    /// The child's task description (a workflow agent's label), sent as `x.ai/requester.label` on its permission asks.
+    #[serde(default)]
+    pub subagent_label: Option<String>,
+    /// The workflow run that spawned this child, sent as `x.ai/requester.runId` on its permission asks.
+    #[serde(default)]
+    pub workflow_run_id: Option<String>,
     /// Set on a fork spawn so `install_system_prompt` does NOT overwrite the inherited System at `conversation[0]`.
     /// The verbatim parent copy already holds the parent's System, and overwriting it would bust the cache prefix.
     #[serde(default)]
@@ -624,6 +630,13 @@ pub struct StartupHints {
     /// Parent project cwd for child/worktree overlay kill-switch. Not on the wire.
     #[serde(skip)]
     pub parent_cwd: Option<PathBuf>,
+    /// The parent's `_meta.rules`, appended to a workflow child's system prompt. Not on the wire.
+    #[serde(skip)]
+    pub human_rules: Option<std::sync::Arc<str>>,
+    /// A fresh (not forked, not resumed) workflow child: it gets the skills listing a main session
+    /// gets from `Initialize`, which children never receive. Not on the wire.
+    #[serde(skip)]
+    pub workflow_session_start: bool,
     /// Only `"alwaysAllow"` is honored: would-be prompts resolve as allow at the manager's dispatch gate.
     /// Clamped off by the managed always-approve pin; a configured `defaultMode` wins.
     /// Unlike `yoloMode` / `autoMode`, a warm re-attach to an already-resident actor does NOT re-apply it.

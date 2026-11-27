@@ -345,6 +345,30 @@ pub(super) fn admit_explicit_tool_model(
         }
     }
 }
+/// A workflow child lists skills from the parent session's registry: the process snapshot in
+/// `ctx.plugin_registry` never holds the parent's `_meta.pluginDirs` plugins.
+pub(super) async fn inherit_parent_skills(
+    ctx: &mut SubagentSpawnContext,
+    request: &SubagentRequest,
+    inherit_skills: bool,
+) {
+    if request.owner.is_workflow() {
+        ctx.plugin_registry = ctx.parent_plugin_registry.clone();
+    }
+    if inherit_skills && ctx.parent_skills.is_none() {
+        let parent_cwd_str = ctx.parent_cwd.to_string_lossy().to_string();
+        ctx.parent_skills = Some(
+            xai_grok_agent::prompt::skills::list_skills_with_plugins(
+                Some(&parent_cwd_str),
+                &ctx.parent_skills_config,
+                ctx.plugin_registry.as_deref(),
+                ctx.parent_compat,
+                crate::agent::folder_trust::project_scope_allowed(&ctx.parent_cwd),
+            )
+            .await,
+        );
+    }
+}
 #[tracing::instrument(
     name = "subagent.handle_request",
     skip_all,
@@ -1400,19 +1424,7 @@ pub(crate) async fn run_shell_child(
     }
     let inherit_skills = definition.inherit_skills;
     let definition_background = definition.background.unwrap_or(false);
-    if inherit_skills && ctx.parent_skills.is_none() {
-        let parent_cwd_str = ctx.parent_cwd.to_string_lossy().to_string();
-        ctx.parent_skills = Some(
-            xai_grok_agent::prompt::skills::list_skills_with_plugins(
-                Some(&parent_cwd_str),
-                &ctx.parent_skills_config,
-                ctx.plugin_registry.as_deref(),
-                ctx.parent_compat,
-                crate::agent::folder_trust::project_scope_allowed(&ctx.parent_cwd),
-            )
-            .await,
-        );
-    }
+    inherit_parent_skills(&mut ctx, &request, inherit_skills).await;
     let skills_inherited_count = if inherit_skills {
         ctx.parent_skills
             .as_ref()
@@ -1506,8 +1518,17 @@ pub(crate) async fn run_shell_child(
             non_interactive: ctx.parent_non_interactive,
             parent_session_id: Some(ctx.parent_session_id.clone()),
             subagent_type: Some(request.subagent_type.clone()),
+            subagent_label: Some(request.description.clone()),
+            workflow_run_id: request.owner.workflow_run_id().map(str::to_owned),
             preserve_inherited_system: verbatim_mirror_fork,
             parent_cwd: Some(ctx.parent_cwd.clone()),
+            human_rules: if request.owner.is_workflow() {
+                ctx.parent_human_rules.clone()
+            } else {
+                None
+            },
+            workflow_session_start: request.owner.is_workflow()
+                && context_source == InitialContextSource::New,
             ..Default::default()
         },
         xai_grok_workspace::permission::ClientType::Generic,

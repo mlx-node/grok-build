@@ -16,7 +16,7 @@ use super::attempt_runner::{
 use super::handle_request::{
     CHILD_ACTOR_ACK_TIMEOUT, PARENT_ACK_TIMEOUT, TaskModelAdmissionError,
     admit_explicit_tool_model, agent_memory_scope_for_mode, child_actor_query,
-    explicit_tool_model, mark_child_usage_not_applied_with_fallback,
+    explicit_tool_model, inherit_parent_skills, mark_child_usage_not_applied_with_fallback,
     reparent_surviving_child_tasks, resolve_child_model, take_child_streaming_partial,
     take_child_turn_messages,
 };
@@ -283,6 +283,9 @@ fn wedged_child_handle() -> (
         session_default_agent_profile: None,
         allowed_subagent_types: None,
         hook_registry: None,
+        plugin_registry: None,
+        human_rules: None,
+        workflow_launch_tx: tokio::sync::mpsc::unbounded_channel().0,
         workspace_ops: xai_grok_workspace::WorkspaceOps::for_test(),
         terminal_backend: None,
         tools_notification_handle: None,
@@ -2848,4 +2851,60 @@ async fn join_worker_task_drop_aborts_worker() {
         .await
         .expect("abort must reach the worker task")
         .expect("drop probe fires on abort");
+}
+#[tokio::test]
+async fn workflow_children_list_skills_from_the_parent_session_registry() {
+    use xai_grok_agent::plugins::SharedPluginRegistryHandle;
+    use xai_grok_agent::plugins::discovery::DiscoveryConfig;
+    let workdir = tempfile::tempdir().expect("workdir");
+    let plugin_dir = workdir.path().join("probe-plugin");
+    let skill_dir = plugin_dir.join("skills").join("probe-web");
+    std::fs::create_dir_all(&skill_dir).expect("plugin skill dir");
+    std::fs::write(plugin_dir.join("plugin.json"), r#"{"name":"probe-plugin"}"#)
+        .expect("plugin manifest");
+    std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: probe-web\ndescription: Searches the web.\n---\n\nRun the search.\n",
+        )
+        .expect("plugin skill");
+    let parent_registry = SharedPluginRegistryHandle::new(None, Vec::new())
+        .build_for_cwd(
+            workdir.path(),
+            &DiscoveryConfig {
+                cli_plugin_dirs: Vec::new(),
+                config_paths: Vec::new(),
+                disabled: Vec::new(),
+                enabled: Vec::new(),
+            },
+            &[plugin_dir],
+            false,
+        );
+    assert!(parent_registry.is_some(), "session plugin dir must build a registry");
+    let has_probe_skill = |ctx: &SubagentSpawnContext| {
+        ctx.parent_skills
+            .as_ref()
+            .expect("skills listed")
+            .iter()
+            .any(|skill| {
+                skill.name == "probe-web"
+                    && skill.plugin_name.as_deref() == Some("probe-plugin")
+            })
+    };
+    let child_ctx = || {
+        let mut ctx = ctx_with_toggle(HashMap::new());
+        ctx.parent_cwd = workdir.path().to_path_buf();
+        ctx.parent_plugin_registry = parent_registry.clone();
+        ctx
+    };
+
+    let mut workflow_request = auto_wake_test_request("wf-child");
+    workflow_request.owner = SubagentOwner::workflow("wf_t");
+    let mut ctx = child_ctx();
+    inherit_parent_skills(&mut ctx, &workflow_request, true).await;
+    assert!(has_probe_skill(&ctx), "a workflow child must list the parent's session plugin skill");
+
+    let task_request = auto_wake_test_request("task-child");
+    let mut ctx = child_ctx();
+    inherit_parent_skills(&mut ctx, &task_request, true).await;
+    assert!(!has_probe_skill(&ctx), "a task child keeps the process plugin snapshot");
 }

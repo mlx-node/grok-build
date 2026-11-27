@@ -7,20 +7,26 @@ use xai_workflow::{WorkflowMeta, extract_meta};
 pub(crate) const MAX_WORKFLOW_SOURCE_BYTES: u64 = 1024 * 1024;
 const MAX_WORKFLOW_NAME_BYTES: usize = 64;
 
+/// Compiled into the binary, so there is no file on the user's disk to list or read.
 pub(crate) struct BuiltinWorkflow {
     pub name: &'static str,
     pub script: &'static str,
-    pub path: &'static str,
+    /// The `args` object the script reads, shown in the model-facing listing.
+    pub args_hint: &'static str,
 }
 
 pub(crate) const BUILTIN_WORKFLOWS: &[BuiltinWorkflow] = &[BuiltinWorkflow {
     name: "deep-research",
     script: include_str!("../workflows/deep_research.rhai"),
-    path: concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/session/workflows/deep_research.rhai"
-    ),
+    args_hint: r#"{"query": "<research question>", "breadth": <2-6, optional>}"#,
 }];
+
+fn builtin_args_hint(name: &str) -> Option<&'static str> {
+    BUILTIN_WORKFLOWS
+        .iter()
+        .find(|builtin| builtin.name == name)
+        .map(|builtin| builtin.args_hint)
+}
 
 pub(crate) struct ResolvedWorkflow {
     pub meta: WorkflowMeta,
@@ -115,7 +121,7 @@ fn cached_builtin_entries() -> Vec<RegistryEntry> {
             script: builtin.script.to_string(),
             source: WorkflowSource::Builtin,
             source_label: "builtin",
-            path: Some(PathBuf::from(builtin.path)),
+            path: None,
         })
         .collect()
 }
@@ -185,6 +191,10 @@ impl WorkflowRegistry {
                     .path
                     .as_ref()
                     .map(|path| path.to_string_lossy().into_owned()),
+                args_hint: (entry.source == WorkflowSource::Builtin)
+                    .then(|| builtin_args_hint(&entry.meta.name))
+                    .flatten()
+                    .map(str::to_string),
             })
             .collect()
     }
@@ -657,6 +667,8 @@ pub(crate) struct WorkflowListing {
     pub source: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub args_hint: Option<String>,
 }
 
 pub(crate) fn list_workflows(session_cwd: Option<&Path>) -> Vec<WorkflowListing> {
@@ -815,6 +827,86 @@ mod tests {
         assert_eq!(hit.source_label, "builtin");
         assert_eq!(hit.source, WorkflowSource::Builtin);
         assert_eq!(hit.meta.description, "from-bundle");
+    }
+
+    #[test]
+    fn compiled_in_listing_has_no_build_path_and_names_query_arg() {
+        let registry = WorkflowRegistry {
+            entries: cached_builtin_entries(),
+            duplicate_names: BTreeMap::new(),
+        };
+        let listings = registry.list();
+        let builtin = listings
+            .iter()
+            .find(|listing| listing.name == "deep-research")
+            .expect("deep-research");
+        assert_eq!(builtin.source, "builtin");
+        assert_eq!(builtin.path, None);
+        assert!(
+            builtin
+                .args_hint
+                .as_deref()
+                .is_some_and(|args| args.contains(r#""query""#)),
+            "{:?}",
+            builtin.args_hint
+        );
+        let text =
+            super::super::listing::format_workflow_listing(std::slice::from_ref(builtin)).unwrap();
+        assert!(!text.contains(env!("CARGO_MANIFEST_DIR")), "{text}");
+        assert!(!text.contains("Absolute path:"), "{text}");
+        assert!(
+            text.contains(r#""name": "deep-research"}, args {"query""#),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn managed_bundled_override_keeps_path_and_gets_args_hint() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("bundled");
+        let workflows = root.join("workflows");
+        std::fs::create_dir_all(&workflows).unwrap();
+        let path = workflows.join("deep-research.rhai");
+        std::fs::write(
+            &path,
+            "let meta = #{ name: \"deep-research\", description: \"from-bundle\" };\ncomplete(\"ok\");",
+        )
+        .unwrap();
+        let checksum = crate::bundle::checksum_file(&path).unwrap();
+        let manifest = serde_json::json!({
+            "version": "test",
+            "checksums": { "workflows/deep-research.rhai": checksum },
+        });
+        std::fs::write(root.join("manifest.json"), manifest.to_string()).unwrap();
+
+        let registry = WorkflowRegistry {
+            entries: scan_directory(&workflows, "bundled"),
+            duplicate_names: BTreeMap::new(),
+        };
+        let listings = registry.list();
+        let hit = listings
+            .iter()
+            .find(|listing| listing.name == "deep-research")
+            .expect("deep-research");
+        assert_eq!(hit.source, "builtin");
+        assert_eq!(hit.path.as_deref(), Some(path.to_string_lossy().as_ref()));
+        assert!(hit.args_hint.is_some());
+    }
+
+    #[test]
+    fn file_scoped_workflow_has_no_args_hint() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundled = dir.path().join("workflows");
+        std::fs::create_dir_all(&bundled).unwrap();
+        std::fs::write(bundled.join("deep-research.rhai"), script("deep-research")).unwrap();
+        let registry = WorkflowRegistry {
+            entries: scan_directory(&bundled, "user"),
+            duplicate_names: BTreeMap::new(),
+        };
+        let listings = registry.list();
+        assert_eq!(listings[0].source, "user");
+        assert!(listings[0].path.is_some());
+        assert_eq!(listings[0].args_hint, None);
     }
 
     #[test]
@@ -979,7 +1071,9 @@ mod tests {
         let path = save_project_workflow(&linked, "safe", &script("safe")).unwrap();
         assert_eq!(
             dunce::canonicalize(path).unwrap(),
-            project.join(".grok/workflows/safe.rhai")
+            dunce::canonicalize(&project)
+                .unwrap()
+                .join(".grok/workflows/safe.rhai")
         );
     }
 

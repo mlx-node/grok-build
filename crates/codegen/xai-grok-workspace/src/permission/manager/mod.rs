@@ -576,6 +576,7 @@ pub fn spawn_permission_manager_with_pin(
                             subagent_type: request_subagent_type,
                             subagent_description: request_subagent_description,
                             hook_ask,
+                            requester,
                         },
                     mut respond_to,
                 } => {
@@ -1366,7 +1367,7 @@ pub fn spawn_permission_manager_with_pin(
                         }
                     }
                     let prompt_outcome = tokio::select! {
-                        outcome = prompter.request(&access, &tool_call_update, protected_edit, hook_ask.as_ref()) => outcome,
+                        outcome = prompter.request(&access, &tool_call_update, protected_edit, hook_ask.as_ref(), requester.as_ref()) => outcome,
                         _ = respond_to.closed() => PromptOutcome::Cancelled,
                     };
                     // A subagent message or a plain tool has no grant store: every "always" answer holds for this call only.

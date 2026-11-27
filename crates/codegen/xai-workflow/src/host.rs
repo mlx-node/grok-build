@@ -16,8 +16,6 @@ pub struct AgentOpts {
     #[serde(default)]
     pub agent_type: Option<String>,
     #[serde(default)]
-    pub capability_mode: Option<String>,
-    #[serde(default)]
     pub isolation_worktree: bool,
     #[serde(default)]
     pub fork_context: bool,

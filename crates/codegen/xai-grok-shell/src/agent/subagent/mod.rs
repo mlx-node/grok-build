@@ -317,6 +317,9 @@ pub(crate) struct SubagentSpawnContext {
     pub tool_params_json: crate::session::agent_rebuild::ResolvedToolParamsJson,
     /// Plugin registry for plugin-aware agent lookup.
     pub plugin_registry: Option<std::sync::Arc<xai_grok_agent::plugins::PluginRegistry>>,
+    /// The parent session's own registry. Only it holds the parent's `_meta.pluginDirs` plugins.
+    pub parent_plugin_registry: Option<std::sync::Arc<xai_grok_agent::plugins::PluginRegistry>>,
+    pub parent_human_rules: Option<std::sync::Arc<str>>,
     /// Shared models manager for etag-triggered refresh.
     pub models_manager: crate::agent::remote_config::ModelsManager,
     /// Pre-resolved file tool overrides (hashline vs standard) from the parent.
