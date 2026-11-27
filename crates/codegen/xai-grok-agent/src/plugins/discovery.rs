@@ -1465,6 +1465,19 @@ mod tests {
                 })
                 .count()
         }
+
+        /// Run `f` with this log as the thread's subscriber.
+        fn capture<R>(&self, f: impl FnOnce() -> R) -> R {
+            // tracing-core caches a callsite's interest when it is first hit. With one dispatcher it asks only the
+            // hitting thread's default, so a parallel test thread with none caches `never` and this log misses the
+            // event. A second live dispatcher makes every registration ask each live dispatcher.
+            static SECOND_DISPATCHER: std::sync::LazyLock<tracing::Dispatch> =
+                std::sync::LazyLock::new(|| {
+                    tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default())
+                });
+            std::sync::LazyLock::force(&SECOND_DISPATCHER);
+            tracing::subscriber::with_default(self.clone(), f)
+        }
     }
 
     impl tracing::Subscriber for EventLog {
@@ -1488,15 +1501,14 @@ mod tests {
         fn exit(&self, _: &tracing::span::Id) {}
     }
 
-    #[test]
-    fn name_conflict_won_by_a_later_higher_priority_plugin_is_not_a_warning() {
-        let tmp = tempfile::tempdir().unwrap();
-        let user_plugin = make_manifest_plugin(&tmp.path().join("user-plugins"), "my-plugin");
-        let cli_dir = tmp.path().join("cli");
+    /// A user plugin and a CLI-override plugin, both named `my-plugin`, collected from `root`.
+    fn colliding_user_and_cli_plugins(root: &Path) -> Vec<DiscoveredPlugin> {
+        let user_plugin = make_manifest_plugin(&root.join("user-plugins"), "my-plugin");
+        let cli_dir = root.join("cli");
         std::fs::create_dir_all(&cli_dir).unwrap();
         std::fs::write(cli_dir.join("plugin.json"), r#"{"name": "my-plugin"}"#).unwrap();
 
-        let trust = TrustStore::load_from(tmp.path().join("trust"));
+        let trust = TrustStore::load_from(root.join("trust"));
         let mut seen = HashSet::new();
         let mut candidates = Vec::new();
         collect_plugin(
@@ -1517,11 +1529,34 @@ mod tests {
             &mut seen,
             &mut candidates,
         );
+        candidates
+    }
 
+    /// Fails without `capture`'s second dispatcher when run alone (`--exact`), while the callsite is unregistered.
+    #[test]
+    fn collision_log_reaches_the_capture_when_another_thread_hits_the_callsite_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut candidates = colliding_user_and_cli_plugins(&tmp.path().join("captured"));
+        let elsewhere = tmp.path().join("elsewhere");
         let log = EventLog::default();
-        tracing::subscriber::with_default(log.clone(), || {
+        log.capture(|| {
+            std::thread::spawn(move || {
+                resolve_name_conflicts(&mut colliding_user_and_cli_plugins(&elsewhere));
+            })
+            .join()
+            .unwrap();
             resolve_name_conflicts(&mut candidates);
         });
+        assert_eq!(log.collisions(tracing::Level::DEBUG, "my-plugin"), 1);
+    }
+
+    #[test]
+    fn name_conflict_won_by_a_later_higher_priority_plugin_is_not_a_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut candidates = colliding_user_and_cli_plugins(tmp.path());
+
+        let log = EventLog::default();
+        log.capture(|| resolve_name_conflicts(&mut candidates));
 
         let [winner] = candidates.as_slice() else {
             panic!("expected one candidate: {candidates:?}");
@@ -1576,7 +1611,7 @@ mod tests {
 
         let trust = TrustStore::load_from(tmp.path().join("trust"));
         let log = EventLog::default();
-        let found = tracing::subscriber::with_default(log.clone(), || {
+        let found = log.capture(|| {
             discover_plugins_with_home(
                 None,
                 &DiscoveryConfig::default(),
