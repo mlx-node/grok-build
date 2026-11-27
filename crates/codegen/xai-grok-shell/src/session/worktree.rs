@@ -984,6 +984,7 @@ mod tests {
             .unwrap();
     }
     #[tokio::test]
+    #[serial]
     async fn create_worktree_for_resume_produces_independent_worktree() {
         let tmp = tempfile::TempDir::new().unwrap();
         let repo_path = tmp.path().join("repo");
@@ -1013,6 +1014,7 @@ mod tests {
         assert!(repo_path.join("file.txt").exists());
     }
     #[tokio::test]
+    #[serial]
     async fn create_worktree_for_resume_honors_git_ref() {
         let tmp = tempfile::TempDir::new().unwrap();
         let repo_path = tmp.path().join("repo");
@@ -1056,6 +1058,7 @@ mod tests {
         );
     }
     #[tokio::test]
+    #[serial]
     async fn cleanup_worktree_on_failure_removes_created_worktree() {
         let tmp = tempfile::TempDir::new().unwrap();
         let repo_path = tmp.path().join("repo");
