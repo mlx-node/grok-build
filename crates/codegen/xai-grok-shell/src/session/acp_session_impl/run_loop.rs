@@ -384,6 +384,8 @@ pub(super) async fn run_session(
     let _workflow_watch = crate::config::watcher::ProjectDiscoveryWatcher::start(
         std::path::Path::new(session.session_info.cwd.as_str()),
         &crate::util::grok_home::grok_home(),
+        // A child runs on the parent's skill list: a reload from its own cwd drops the parent's project skills
+        !session.startup_hints.is_subagent,
     )
     .map(|(watcher, mut changes)| {
         let session = session.clone();
