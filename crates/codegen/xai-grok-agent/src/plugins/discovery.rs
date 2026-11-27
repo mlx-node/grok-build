@@ -740,7 +740,8 @@ fn collect_plugin(
 }
 
 /// Within each name group, keep only the highest-priority candidate (lowest scope ordinal).
-/// Log warnings for dropped duplicates.
+/// The winner's `conflict` names the dropped duplicate. The log line is DEBUG: every plugin enabled in Claude Code collides
+/// with itself on each discovery (marketplace clone vs `installed_plugins.json` cache copy).
 fn resolve_name_conflicts(candidates: &mut Vec<DiscoveredPlugin>) {
     let mut name_map: HashMap<String, usize> = HashMap::new();
     let mut to_remove: Vec<usize> = Vec::new();
@@ -757,7 +758,7 @@ fn resolve_name_conflicts(candidates: &mut Vec<DiscoveredPlugin>) {
                 // A lower scope ordinal means higher priority
                 if (candidate.scope as u8) < (existing.scope as u8) {
                     // New candidate wins
-                    tracing::warn!(
+                    tracing::debug!(
                         plugin_name = %name,
                         winner = %candidate.root.display(),
                         loser = %existing.root.display(),
@@ -773,7 +774,7 @@ fn resolve_name_conflicts(candidates: &mut Vec<DiscoveredPlugin>) {
                     name_map.insert(name, idx);
                 } else {
                     // Existing wins
-                    tracing::warn!(
+                    tracing::debug!(
                         plugin_name = %name,
                         winner = %existing.root.display(),
                         loser = %candidate.root.display(),
@@ -1429,6 +1430,206 @@ mod tests {
             candidates.first().map(|c| c.scope),
             Some(PluginScope::CliOverride)
         );
+    }
+
+    const COLLISION_LOG: &str = "plugin name collision resolved by scope precedence";
+
+    #[derive(Default)]
+    struct EventFields {
+        message: String,
+        plugin_name: String,
+    }
+
+    impl tracing::field::Visit for EventFields {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            match field.name() {
+                "message" => self.message = format!("{value:?}"),
+                "plugin_name" => self.plugin_name = format!("{value:?}"),
+                _ => {}
+            }
+        }
+    }
+
+    // Discovery also loads the real install registry (step 5b), so count only the fixture plugin's collisions.
+    #[derive(Clone, Default)]
+    struct EventLog(std::sync::Arc<std::sync::Mutex<Vec<(tracing::Level, EventFields)>>>);
+
+    impl EventLog {
+        fn collisions(&self, level: tracing::Level, plugin_name: &str) -> usize {
+            self.0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(l, f)| {
+                    *l == level && f.message == COLLISION_LOG && f.plugin_name == plugin_name
+                })
+                .count()
+        }
+
+        /// Run `f` with this log as the thread's subscriber.
+        fn capture<R>(&self, f: impl FnOnce() -> R) -> R {
+            // tracing-core caches a callsite's interest when it is first hit. With one dispatcher it asks only the
+            // hitting thread's default, so a parallel test thread with none caches `never` and this log misses the
+            // event. A second live dispatcher makes every registration ask each live dispatcher.
+            static SECOND_DISPATCHER: std::sync::LazyLock<tracing::Dispatch> =
+                std::sync::LazyLock::new(|| {
+                    tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default())
+                });
+            std::sync::LazyLock::force(&SECOND_DISPATCHER);
+            tracing::subscriber::with_default(self.clone(), f)
+        }
+    }
+
+    impl tracing::Subscriber for EventLog {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            let mut fields = EventFields::default();
+            event.record(&mut fields);
+            self.0
+                .lock()
+                .unwrap()
+                .push((*event.metadata().level(), fields));
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    /// A user plugin and a CLI-override plugin, both named `my-plugin`, collected from `root`.
+    fn colliding_user_and_cli_plugins(root: &Path) -> Vec<DiscoveredPlugin> {
+        let user_plugin = make_manifest_plugin(&root.join("user-plugins"), "my-plugin");
+        let cli_dir = root.join("cli");
+        std::fs::create_dir_all(&cli_dir).unwrap();
+        std::fs::write(cli_dir.join("plugin.json"), r#"{"name": "my-plugin"}"#).unwrap();
+
+        let trust = TrustStore::load_from(root.join("trust"));
+        let mut seen = HashSet::new();
+        let mut candidates = Vec::new();
+        collect_plugin(
+            &user_plugin,
+            PluginScope::User,
+            PluginOrigin::UserGrok,
+            &trust,
+            false,
+            &mut seen,
+            &mut candidates,
+        );
+        collect_plugin(
+            &cli_dir,
+            PluginScope::CliOverride,
+            PluginOrigin::CliOverride,
+            &trust,
+            false,
+            &mut seen,
+            &mut candidates,
+        );
+        candidates
+    }
+
+    /// Fails without `capture`'s second dispatcher when run alone (`--exact`), while the callsite is unregistered.
+    #[test]
+    fn collision_log_reaches_the_capture_when_another_thread_hits_the_callsite_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut candidates = colliding_user_and_cli_plugins(&tmp.path().join("captured"));
+        let elsewhere = tmp.path().join("elsewhere");
+        let log = EventLog::default();
+        log.capture(|| {
+            std::thread::spawn(move || {
+                resolve_name_conflicts(&mut colliding_user_and_cli_plugins(&elsewhere));
+            })
+            .join()
+            .unwrap();
+            resolve_name_conflicts(&mut candidates);
+        });
+        assert_eq!(log.collisions(tracing::Level::DEBUG, "my-plugin"), 1);
+    }
+
+    #[test]
+    fn name_conflict_won_by_a_later_higher_priority_plugin_is_not_a_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut candidates = colliding_user_and_cli_plugins(tmp.path());
+
+        let log = EventLog::default();
+        log.capture(|| resolve_name_conflicts(&mut candidates));
+
+        let [winner] = candidates.as_slice() else {
+            panic!("expected one candidate: {candidates:?}");
+        };
+        assert_eq!(winner.scope, PluginScope::CliOverride);
+        assert!(winner.conflict.is_some());
+        assert_eq!(log.collisions(tracing::Level::WARN, "my-plugin"), 0);
+        assert_eq!(log.collisions(tracing::Level::DEBUG, "my-plugin"), 1);
+    }
+
+    /// Claude Code keeps each enabled plugin twice, both User scope: the marketplace clone (step 5a) and the
+    /// `installed_plugins.json` cache copy (step 5c). Every discovery resolves that collision.
+    #[test]
+    fn claude_marketplace_clone_and_installed_copy_collision_is_not_a_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let claude_plugins = home.join(".claude/plugins");
+        let name = format!("collide{}", std::process::id());
+        let write_manifest = |root: &Path| {
+            std::fs::create_dir_all(root.join(".claude-plugin")).unwrap();
+            std::fs::write(
+                root.join(".claude-plugin/plugin.json"),
+                serde_json::json!({ "name": name }).to_string(),
+            )
+            .unwrap();
+        };
+        let clone = claude_plugins.join("marketplaces/mkt");
+        write_manifest(&clone.join("plugins").join(&name));
+        let installed = claude_plugins.join("cache/mkt").join(&name).join("1.0.0");
+        write_manifest(&installed);
+        std::fs::write(
+            claude_plugins.join("known_marketplaces.json"),
+            serde_json::json!({ "mkt": { "installLocation": clone } }).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            home.join(".claude/settings.json"),
+            serde_json::json!({ "enabledPlugins": { format!("{name}@mkt"): true } }).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            claude_plugins.join("installed_plugins.json"),
+            serde_json::json!({
+                "version": 2,
+                "plugins": {
+                    format!("{name}@mkt"): [{ "scope": "user", "installPath": installed }],
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let trust = TrustStore::load_from(tmp.path().join("trust"));
+        let log = EventLog::default();
+        let found = log.capture(|| {
+            discover_plugins_with_home(
+                None,
+                &DiscoveryConfig::default(),
+                &trust,
+                false,
+                Some(&home),
+                Some(&tmp.path().join("grok-home")),
+            )
+        });
+
+        let ours: Vec<_> = found.iter().filter(|p| p.manifest.name == name).collect();
+        let [winner] = ours.as_slice() else {
+            panic!("expected one {name} plugin: {found:?}");
+        };
+        assert_eq!(winner.scope, PluginScope::User);
+        assert!(winner.conflict.is_some());
+        assert_eq!(log.collisions(tracing::Level::WARN, &name), 0);
+        assert_eq!(log.collisions(tracing::Level::DEBUG, &name), 1);
     }
 
     #[test]

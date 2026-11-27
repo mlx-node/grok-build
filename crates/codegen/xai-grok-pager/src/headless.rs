@@ -110,6 +110,8 @@ struct HeadlessEmitter {
     output_closed: bool,
     /// First hard stdout IO error (not a broken pipe), surfaced so the process exits non-zero.
     write_error: Option<std::io::Error>,
+    /// The session this run opened. Subagents and workflow children share its gateway, so their updates arrive here too.
+    main_session: Option<acp::SessionId>,
 }
 impl HeadlessEmitter {
     fn new(format: OutputFormat, parse_structured_output: bool) -> Self {
@@ -125,7 +127,13 @@ impl HeadlessEmitter {
             out: std::io::stdout(),
             output_closed: false,
             write_error: None,
+            main_session: None,
         }
+    }
+    fn is_other_session(&self, session_id: &acp::SessionId) -> bool {
+        self.main_session
+            .as_ref()
+            .is_some_and(|main| main != session_id)
     }
     /// Checked write to stdout: broken pipe latches a clean stop, any other error is latched and returned.
     fn write_out(&mut self, bytes: &[u8], flush: bool) -> std::io::Result<()> {
@@ -485,6 +493,7 @@ fn build_headless_init_request(
             "startupHints".into(),
             serde_json::json!({
                 "nonInteractive": true,
+                "skipTurnSummary": true,
             }),
         );
     }
@@ -1070,6 +1079,7 @@ pub async fn run_single_turn(
         }
     };
     PendingStartup::finish_held(&mut pending_startup, crate::acp::StartupOutcome::Ok);
+    emitter.main_session = Some(session_id.clone());
     tracing::debug!(
         elapsed_ms = t_session.elapsed().as_millis() as u64,
         session_id = %session_id.0,
@@ -1662,7 +1672,10 @@ fn track_background_lifecycle(
                 }
             }
         }
-        ExtEvent::MonitorEvent | ExtEvent::None | ExtEvent::Lifecycle(_) | ExtEvent::Stream(_) => {}
+        ExtEvent::MonitorEvent
+        | ExtEvent::None
+        | ExtEvent::Lifecycle { .. }
+        | ExtEvent::Stream { .. } => {}
     }
 }
 /// Non-blocking drain-to-empty of `acp_rx`.
@@ -1749,6 +1762,11 @@ fn handle_headless_acp_message(
     background_lifecycle: &mut BackgroundLifecycleState,
 ) {
     match msg {
+        AcpClientMessageBox::SessionNotification(boxed)
+            if emitter.is_other_session(&boxed.request.session_id) =>
+        {
+            let _ = boxed.response_tx.send(Ok(()));
+        }
         AcpClientMessageBox::SessionNotification(boxed) => {
             match &boxed.request.update {
                 acp::SessionUpdate::AgentMessageChunk(chunk) => {
@@ -1816,8 +1834,16 @@ fn handle_headless_acp_message(
             let event = handle_ext_notification(&notif);
             let _ = notif.response_tx.send(Ok(()));
             match event {
-                ExtEvent::Lifecycle(l) => emitter.on_lifecycle(l),
-                ExtEvent::Stream(event) => emitter.reduce_and_emit(*event),
+                ExtEvent::Lifecycle {
+                    session_id: Some(session_id),
+                    ..
+                }
+                | ExtEvent::Stream {
+                    session_id: Some(session_id),
+                    ..
+                } if emitter.is_other_session(&session_id) => {}
+                ExtEvent::Lifecycle { event, .. } => emitter.on_lifecycle(event),
+                ExtEvent::Stream { event, .. } => emitter.reduce_and_emit(*event),
                 other => track_background_lifecycle(other, pending_bg, background_lifecycle),
             }
         }

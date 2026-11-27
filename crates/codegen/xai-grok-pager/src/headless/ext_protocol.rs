@@ -91,8 +91,14 @@ pub(crate) enum ExtEvent {
         event_seq: Option<u64>,
     },
     MonitorEvent,
-    Lifecycle(Lifecycle),
-    Stream(Box<StreamEvent>),
+    Lifecycle {
+        session_id: Option<acp::SessionId>,
+        event: Lifecycle,
+    },
+    Stream {
+        session_id: Option<acp::SessionId>,
+        event: Box<StreamEvent>,
+    },
 }
 
 pub(crate) fn handle_ext_notification(
@@ -304,6 +310,8 @@ fn decode_session_notification(method: &str, params: &str) -> ExtEvent {
     }
     #[derive(serde::Deserialize)]
     struct XaiNotif {
+        #[serde(default, rename = "sessionId")]
+        session_id: Option<acp::SessionId>,
         update: XaiUpdate,
         #[serde(default, rename = "_meta")]
         meta: Option<serde_json::Value>,
@@ -327,29 +335,34 @@ fn decode_session_notification(method: &str, params: &str) -> ExtEvent {
         .and_then(|meta| meta.get("eventId"))
         .and_then(serde_json::Value::as_str)
         .and_then(crate::acp::meta::event_id_counter);
+    let session_id = xai_notif.session_id;
+    let lifecycle = |event| ExtEvent::Lifecycle {
+        session_id: session_id.clone(),
+        event,
+    };
+    let stream = |event| ExtEvent::Stream {
+        session_id: session_id.clone(),
+        event: Box::new(event),
+    };
 
     match xai_notif.update {
         XaiUpdate::AutoCompactStarted { percentage } => {
-            ExtEvent::Lifecycle(Lifecycle::CompactStarted { percentage })
+            lifecycle(Lifecycle::CompactStarted { percentage })
         }
         XaiUpdate::AutoCompactCompleted { tokens_before } => {
-            ExtEvent::Lifecycle(Lifecycle::CompactCompleted {
+            lifecycle(Lifecycle::CompactCompleted {
                 pre_tokens: tokens_before.unwrap_or(0),
             })
         }
-        XaiUpdate::AutoCompactFailed { error } => {
-            ExtEvent::Lifecycle(Lifecycle::CompactFailed { error })
-        }
-        XaiUpdate::AutoCompactCancelled {} => ExtEvent::Lifecycle(Lifecycle::CompactCancelled),
+        XaiUpdate::AutoCompactFailed { error } => lifecycle(Lifecycle::CompactFailed { error }),
+        XaiUpdate::AutoCompactCancelled {} => lifecycle(Lifecycle::CompactCancelled),
         XaiUpdate::AutoContinueCompleted { total_tokens } => {
-            ExtEvent::Lifecycle(Lifecycle::AutoContinue { total_tokens })
+            lifecycle(Lifecycle::AutoContinue { total_tokens })
         }
-        XaiUpdate::ImageCompressed { message } => {
-            ExtEvent::Lifecycle(Lifecycle::ImageCompressed { message })
-        }
-        XaiUpdate::MemoryFlushStarted {} => ExtEvent::Lifecycle(Lifecycle::MemoryFlushStarted),
+        XaiUpdate::ImageCompressed { message } => lifecycle(Lifecycle::ImageCompressed { message }),
+        XaiUpdate::MemoryFlushStarted {} => lifecycle(Lifecycle::MemoryFlushStarted),
         XaiUpdate::MemoryFlushCompleted { result, path } => {
-            ExtEvent::Lifecycle(Lifecycle::MemoryFlushCompleted { result, path })
+            lifecycle(Lifecycle::MemoryFlushCompleted { result, path })
         }
         XaiUpdate::MemoryCaptureActivity {
             activity,
@@ -357,7 +370,7 @@ fn decode_session_notification(method: &str, params: &str) -> ExtEvent {
             through_turn,
             attempt,
             detail,
-        } => ExtEvent::Lifecycle(Lifecycle::MemoryCaptureActivity {
+        } => lifecycle(Lifecycle::MemoryCaptureActivity {
             activity,
             from_turn,
             through_turn,
@@ -394,15 +407,15 @@ fn decode_session_notification(method: &str, params: &str) -> ExtEvent {
             input_tokens,
             cache_read_input_tokens,
             cache_creation_input_tokens,
-        } => ExtEvent::Stream(Box::new(StreamEvent::ResponseStarted {
+        } => stream(StreamEvent::ResponseStarted {
             message_id,
             model,
             input_tokens,
             cache_read_input_tokens,
             cache_creation_input_tokens,
-        })),
+        }),
         XaiUpdate::ReasoningCompleted { signature } => {
-            ExtEvent::Stream(Box::new(StreamEvent::ReasoningCompleted { signature }))
+            stream(StreamEvent::ReasoningCompleted { signature })
         }
         XaiUpdate::ResponseCompleted {
             message_id,
@@ -410,16 +423,14 @@ fn decode_session_notification(method: &str, params: &str) -> ExtEvent {
             usage,
             signature,
             stop_sequence,
-        } => ExtEvent::Stream(Box::new(StreamEvent::ResponseCompleted {
+        } => stream(StreamEvent::ResponseCompleted {
             message_id,
             stop_reason,
             usage,
             signature,
             stop_sequence,
-        })),
-        XaiUpdate::TurnUsage { usage } => {
-            ExtEvent::Stream(Box::new(StreamEvent::TurnUsage { usage }))
-        }
+        }),
+        XaiUpdate::TurnUsage { usage } => stream(StreamEvent::TurnUsage { usage }),
         // A task_backgrounded or task_completed tag arriving here belongs on its dedicated method; log loudly
         // Any other unknown tag stays a clean ignore
         XaiUpdate::Other => {

@@ -182,6 +182,20 @@ fn s(v: &str) -> String {
 }
 
 #[test]
+fn headless_init_request_asks_to_skip_the_turn_summary() {
+    let request = build_headless_init_request(None, None);
+    let hints = request
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.get("startupHints"))
+        .expect("the headless init request carries startupHints");
+    assert_eq!(
+        hints,
+        &serde_json::json!({ "nonInteractive": true, "skipTurnSummary": true })
+    );
+}
+
+#[test]
 fn headless_materialize_ctx_stays_non_chat() {
     use crate::app::session_startup::TitleResolution;
     for pinned in [false, true] {
@@ -823,4 +837,152 @@ fn handler_answers_ext_method_instead_of_dropping() {
     let parsed: AskUserQuestionExtResponse =
         serde_json::from_str(resp.0.get()).expect("typed wire reply");
     assert!(matches!(parsed, AskUserQuestionExtResponse::Cancelled));
+}
+
+type AckRx = tokio::sync::oneshot::Receiver<xai_acp_lib::AcpResult<()>>;
+
+fn session_update_from(session: &str, update: acp::SessionUpdate) -> (AcpClientMessageBox, AckRx) {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let msg = xai_acp_lib::AcpClientMessage::SessionNotification(xai_acp_lib::AcpArgs {
+        request: acp::SessionNotification::new(acp::SessionId::new(session), update),
+        response_tx: tx,
+    });
+    (msg.boxed(), rx)
+}
+
+fn xai_update_from(
+    session: Option<&str>,
+    update: serde_json::Value,
+) -> (AcpClientMessageBox, AckRx) {
+    let mut params = serde_json::json!({ "update": update });
+    if let Some(session) = session {
+        params["sessionId"] = session.into();
+    }
+    let raw = serde_json::value::to_raw_value(&params).unwrap();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let msg = xai_acp_lib::AcpClientMessage::ExtNotification(xai_acp_lib::AcpArgs {
+        request: acp::ExtNotification::new("x.ai/session_notification", raw.into()),
+        response_tx: tx,
+    });
+    (msg.boxed(), rx)
+}
+
+fn handle_all(
+    emitter: &mut HeadlessEmitter,
+    pending: &mut HashSet<super::BackgroundWork>,
+    msgs: Vec<AcpClientMessageBox>,
+) {
+    let mut lifecycle = super::BackgroundLifecycleState::default();
+    let mut ttf_logged = true;
+    for msg in msgs {
+        super::handle_headless_acp_message(
+            msg,
+            emitter,
+            std::time::Instant::now(),
+            &mut ttf_logged,
+            false,
+            pending,
+            &mut lifecycle,
+        );
+    }
+}
+
+fn text_chunk(text: &str) -> acp::ContentChunk {
+    acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(text)))
+}
+
+#[test]
+fn handler_drops_other_session_chunks() {
+    let mut emitter = HeadlessEmitter::new(OutputFormat::Json, false);
+    emitter.main_session = Some(acp::SessionId::new("main"));
+    let (main_text, main_ack) = session_update_from(
+        "main",
+        acp::SessionUpdate::AgentMessageChunk(text_chunk("A")),
+    );
+    let (child_text, child_text_ack) = session_update_from(
+        "child",
+        acp::SessionUpdate::AgentMessageChunk(text_chunk("B")),
+    );
+    let (child_thought, child_thought_ack) = session_update_from(
+        "child",
+        acp::SessionUpdate::AgentThoughtChunk(text_chunk("T")),
+    );
+    handle_all(
+        &mut emitter,
+        &mut HashSet::new(),
+        vec![main_text, child_text, child_thought],
+    );
+    assert_eq!(
+        ("A", ""),
+        (
+            emitter.text_buffer.as_str(),
+            emitter.thought_buffer.as_str()
+        )
+    );
+    for mut ack in [main_ack, child_text_ack, child_thought_ack] {
+        assert!(
+            matches!(ack.try_recv(), Ok(Ok(()))),
+            "every update is answered"
+        );
+    }
+}
+
+#[test]
+fn handler_keeps_child_background_lifecycle() {
+    let mut emitter = HeadlessEmitter::new(OutputFormat::Json, false);
+    emitter.main_session = Some(acp::SessionId::new("main"));
+    let (spawned, _ack) = xai_update_from(
+        Some("child"),
+        serde_json::json!({ "sessionUpdate": "subagent_spawned", "subagent_id": "sub-1" }),
+    );
+    let mut pending = HashSet::new();
+    handle_all(&mut emitter, &mut pending, vec![spawned]);
+    assert!(pending.contains(&super::BackgroundWork::Subagent("sub-1".into())));
+}
+
+struct RecordingReducer(std::rc::Rc<std::cell::RefCell<Vec<&'static str>>>);
+
+impl Reducer for RecordingReducer {
+    fn reduce(&mut self, event: StreamEvent) -> Vec<serde_json::Value> {
+        self.0.borrow_mut().push(match event {
+            StreamEvent::TurnUsage { .. } => "turn_usage",
+            StreamEvent::Lifecycle(_) => "lifecycle",
+            _ => "other",
+        });
+        Vec::new()
+    }
+    fn finish(&mut self, _end: &TurnEnd<'_>) -> Vec<serde_json::Value> {
+        Vec::new()
+    }
+    fn error(
+        &mut self,
+        _message: &str,
+        _usage: Option<&serde_json::Value>,
+        _duration_ms: u64,
+        _stop_reason: Option<&str>,
+    ) -> Vec<serde_json::Value> {
+        Vec::new()
+    }
+}
+
+#[test]
+fn handler_drops_other_session_lifecycle_and_stream_events() {
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let mut emitter = HeadlessEmitter::new(OutputFormat::StreamingJson, false);
+    emitter.reducer = Some(Box::new(RecordingReducer(seen.clone())));
+    emitter.main_session = Some(acp::SessionId::new("main"));
+    let turn_usage =
+        serde_json::json!({ "sessionUpdate": "turn_usage", "usage": { "input_tokens": 1 } });
+    let compact = serde_json::json!({ "sessionUpdate": "auto_compact_started", "percentage": 90 });
+    let msgs = [
+        xai_update_from(Some("child"), turn_usage.clone()),
+        xai_update_from(Some("child"), compact.clone()),
+        xai_update_from(Some("main"), turn_usage),
+        xai_update_from(None, compact),
+    ]
+    .into_iter()
+    .map(|(msg, _ack)| msg)
+    .collect();
+    handle_all(&mut emitter, &mut HashSet::new(), msgs);
+    assert_eq!(vec!["turn_usage", "lifecycle"], *seen.borrow());
 }

@@ -242,7 +242,7 @@ fn headless_response_completed_parses_per_response_fields() {
             "stop_sequence": "<END>",
         }),
     );
-    let ExtEvent::Stream(event) = handle_ext_notification(&notif) else {
+    let ExtEvent::Stream { event, .. } = handle_ext_notification(&notif) else {
         panic!("expected Stream event");
     };
     let StreamEvent::ResponseCompleted {
@@ -277,7 +277,7 @@ fn headless_response_started_parses_per_response_fields() {
             "cache_creation_input_tokens": 3,
         }),
     );
-    let ExtEvent::Stream(event) = handle_ext_notification(&notif) else {
+    let ExtEvent::Stream { event, .. } = handle_ext_notification(&notif) else {
         panic!("expected Stream event");
     };
     let StreamEvent::ResponseStarted {
@@ -306,7 +306,7 @@ fn headless_reasoning_completed_parses_signature() {
             "signature": "sig-xyz",
         }),
     );
-    let ExtEvent::Stream(event) = handle_ext_notification(&notif) else {
+    let ExtEvent::Stream { event, .. } = handle_ext_notification(&notif) else {
         panic!("expected Stream event");
     };
     let StreamEvent::ReasoningCompleted { signature } = *event else {
@@ -664,7 +664,10 @@ fn headless_memory_flush_notifications_decode() {
     );
     assert!(matches!(
         handle_ext_notification(&started),
-        ExtEvent::Lifecycle(Lifecycle::MemoryFlushStarted)
+        ExtEvent::Lifecycle {
+            event: Lifecycle::MemoryFlushStarted,
+            ..
+        }
     ));
 
     let completed = make_ext_notif(
@@ -676,7 +679,10 @@ fn headless_memory_flush_notifications_decode() {
         }),
     );
     match handle_ext_notification(&completed) {
-        ExtEvent::Lifecycle(Lifecycle::MemoryFlushCompleted { result, path }) => {
+        ExtEvent::Lifecycle {
+            event: Lifecycle::MemoryFlushCompleted { result, path },
+            ..
+        } => {
             assert_eq!(result, "written");
             assert_eq!(path.as_deref(), Some("/tmp/memory/sessions/log.md"));
         }
@@ -699,13 +705,17 @@ fn headless_memory_capture_activity_decodes_without_content() {
         }),
     );
     match handle_ext_notification(&notification) {
-        ExtEvent::Lifecycle(Lifecycle::MemoryCaptureActivity {
-            activity,
-            from_turn,
-            through_turn,
-            attempt,
-            detail,
-        }) => {
+        ExtEvent::Lifecycle {
+            event:
+                Lifecycle::MemoryCaptureActivity {
+                    activity,
+                    from_turn,
+                    through_turn,
+                    attempt,
+                    detail,
+                },
+            ..
+        } => {
             assert_eq!(activity, "running");
             assert_eq!((from_turn, through_turn, attempt), (2, 5, 1));
             assert!(detail.is_none());

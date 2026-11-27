@@ -3,7 +3,7 @@ use pretty_assertions::assert_eq;
 
 #[test]
 fn acp_reducer_maps_agent_message_to_text() {
-    let mut r = AcpReducer;
+    let mut r = AcpReducer::default();
     let out = r.reduce(StreamEvent::AgentMessage("hi".into()));
     let Some(first) = out.first() else {
         panic!("expected an ACP line: {out:?}");
@@ -13,7 +13,7 @@ fn acp_reducer_maps_agent_message_to_text() {
 
 #[test]
 fn acp_reducer_maps_tool_call_to_native_shape() {
-    let mut r = AcpReducer;
+    let mut r = AcpReducer::default();
     let out = r.reduce(StreamEvent::ToolCall(tool_call_ev()));
     let Some(first) = out.first() else {
         panic!("expected an ACP line: {out:?}");
@@ -36,7 +36,7 @@ fn acp_reducer_maps_tool_call_to_native_shape() {
 
 #[test]
 fn acp_reducer_maps_tool_call_update_to_native_shape() {
-    let mut r = AcpReducer;
+    let mut r = AcpReducer::default();
     let out = r.reduce(StreamEvent::ToolCallUpdate(tool_update(
         "completed",
         json!({"ok": true}),
@@ -59,7 +59,7 @@ fn acp_reducer_maps_tool_call_update_to_native_shape() {
 
 #[test]
 fn acp_response_completed_emits_usage_line() {
-    let mut r = AcpReducer;
+    let mut r = AcpReducer::default();
     let out = r.reduce(StreamEvent::ResponseCompleted {
         message_id: Some("msg_1".into()),
         stop_reason: Some("tool_use".into()),
@@ -86,7 +86,7 @@ fn acp_response_completed_emits_usage_line() {
 
 #[test]
 fn acp_turn_usage_emits_usage_line_without_a_message_id() {
-    let mut r = AcpReducer;
+    let mut r = AcpReducer::default();
     let out = r.reduce(StreamEvent::TurnUsage {
         usage: ResponseUsage {
             input_tokens: 5_000,
@@ -110,7 +110,7 @@ fn acp_turn_usage_emits_usage_line_without_a_message_id() {
 
 #[test]
 fn acp_finish_emits_end_line_with_usage_and_structured_output() {
-    let mut r = AcpReducer;
+    let mut r = AcpReducer::default();
     let aggregate = json!({
         "inputTokens": 5,
         "outputTokens": 2,
@@ -135,4 +135,25 @@ fn acp_finish_emits_end_line_with_usage_and_structured_output() {
     assert_eq!(json_str(end, "/requestId"), Some("req-1"));
     assert_eq!(json_str(end, "/structuredOutput/name"), Some("alice"));
     assert!(end.get("usage").is_some_and(Value::is_object));
+}
+
+#[test]
+fn acp_reducer_emits_available_commands_only_when_changed() {
+    let lists = |tool: &str, command: &str| StreamEvent::AvailableCommands {
+        tools: vec![tool.to_string()],
+        commands: vec![command.to_string()],
+        skills: Vec::new(),
+    };
+    let mut r = AcpReducer::default();
+    let line_counts: Vec<usize> = [
+        lists("read_file", "compact"),
+        lists("read_file", "compact"),
+        lists("bash", "compact"),
+        lists("bash", "init"),
+        lists("bash", "init"),
+    ]
+    .into_iter()
+    .map(|event| r.reduce(event).len())
+    .collect();
+    assert_eq!(vec![1, 0, 1, 1, 0], line_counts);
 }
