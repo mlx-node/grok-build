@@ -107,12 +107,11 @@ fn temp_runtime_root(tag: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "grok-runtime-sockets-{tag}-{}-{nanos}",
-        std::process::id()
-    ));
+    // macOS caps a unix socket path at 103 bytes, and its per-user temp dir alone takes 49.
+    let root =
+        PathBuf::from("/tmp").join(format!("grok-sock-{tag}-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
-    root
+    dunce::canonicalize(root).unwrap()
 }
 
 #[test]
