@@ -5251,6 +5251,8 @@ impl AppView {
             for child in agent.subagent_views.values_mut() {
                 needs_redraw |= child.edit_hl_tick();
             }
+            // mlx-node fork: expire subagent progress labels whose ticks stopped.
+            needs_redraw |= crate::app::acp_handler::expire_stale_subagent_progress(agent);
         }
         if let ActiveView::Agent(id) = self.active_view
             && let Some(agent) = self.agents.get_mut(&id)

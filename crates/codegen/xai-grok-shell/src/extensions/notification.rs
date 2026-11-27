@@ -8,6 +8,8 @@ pub use crate::session::goal_tracker::GoalClassifierVerdict;
 // mlx-node fork: the session-update wire shape carries per-response perf counters;
 // clients (the pager) name the type through this crate.
 pub use xai_grok_sampling_types::TurnPerf;
+// mlx-node fork: live prefill/decode progress from the local MLX server's keepalive ping.
+pub use xai_grok_sampling_types::{StreamProgress, StreamProgressPhase};
 
 /// Retained for wire backwards compatibility; always empty in the simplified goal model (no deliverables).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1150,7 +1152,7 @@ pub enum SessionUpdate {
         /// Wall-clock turn duration in milliseconds. `None` on old files.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         elapsed_ms: Option<u64>,
-        /// mlx-node fork: the turn's last response perf counters (prefill/decode tok/s, cache share). `None` on old files and other backends.
+        /// mlx-node fork: perf counters totalled over every model call of the turn (prefill/decode tok/s, cache share). Files written before the totals carry the last call's values; `None` on older files and other backends.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         perf: Option<xai_grok_sampling_types::TurnPerf>,
     },
@@ -1169,6 +1171,9 @@ pub enum SessionUpdate {
         #[serde(default)]
         cache_creation_input_tokens: u64,
     },
+    /// mlx-node fork: live prefill/decode progress the local MLX server rides on the keepalive ping (~10 s cadence).
+    /// Rides the buffered chunk rail so it stays ordered with this response's chunks; never persisted.
+    StreamProgress { progress: StreamProgress },
     /// This response's reasoning (thinking) block finished; carries its encrypted signature. Rides the buffered chunk rail so it is ordered right AFTER this response's thought chunks (and before its text).
     /// Headless partial-mode framing consumes it to emit `signature_delta` before the thinking block's `content_block_stop`, in order. Messages backend only.
     ReasoningCompleted {

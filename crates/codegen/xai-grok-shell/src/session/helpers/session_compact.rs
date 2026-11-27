@@ -763,7 +763,7 @@ pub(crate) async fn generate_session_compact(
                     Ok(event) => {
                         if !matches!(
                             &event,
-                            xai_grok_sampling_types::messages::MessageStreamEvent::Ping
+                            xai_grok_sampling_types::messages::MessageStreamEvent::Ping { .. }
                         ) {
                             last_progress_at = std::time::Instant::now();
                         }

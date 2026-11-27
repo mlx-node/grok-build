@@ -2082,6 +2082,12 @@ impl AgentView {
                         flat_background: false,
                         held_queue,
                         held_queue_top_sendable,
+                        // mlx-node fork: live prefill/decode progress.
+                        stream_progress: if send_now_gap {
+                            None
+                        } else {
+                            self.session.tracker.stream_progress_label()
+                        },
                     },
                 );
                 self.hit_cancel_button

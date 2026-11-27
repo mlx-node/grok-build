@@ -11,7 +11,7 @@
 //! - Cancel button `[stop]` (right-aligned, red on hover)
 //!
 //! The row is hidden when idle (0 height) and appears between scrollback and prompt.
-use crate::acp::tracker::{TurnActivity, WaitingReason};
+use crate::acp::tracker::{StreamProgressLabel, TurnActivity, WaitingReason};
 use crate::app::agent::{AgentCommand, AgentState};
 use crate::render::line_utils::truncate_str;
 use crate::theme::Theme;
@@ -165,6 +165,8 @@ pub struct TurnStatusArgs<'a> {
     pub flat_background: bool,
     pub held_queue: usize,
     pub held_queue_top_sendable: bool,
+    /// mlx-node fork: live prefill/decode progress from the local MLX server.
+    pub stream_progress: Option<StreamProgressLabel>,
 }
 /// Render the turn status line into the given area.
 ///
@@ -193,6 +195,7 @@ pub fn render_turn_status(
         flat_background,
         held_queue,
         held_queue_top_sendable,
+        stream_progress,
     } = args;
     let show_buttons = buttons.is_some();
     let cancel_hovered = buttons.is_some_and(|b| b.cancel_hovered);
@@ -271,8 +274,27 @@ pub fn render_turn_status(
                 | AgentState::TurnCancelling
                 | AgentState::CommandCancelling { .. }
         );
-    let (activity_style, label, is_tool) =
+    let (activity_style, mut label, is_tool) =
         compute_activity(&theme, state, activity, is_bash_turn, goal_verifying);
+    // mlx-node fork: progress applies only while the model is the thing being waited on or streamed from.
+    let mut progress_suffix: Option<String> = None;
+    if matches!(state, AgentState::TurnRunning)
+        && !goal_verifying
+        && matches!(
+            activity,
+            None | Some(
+                TurnActivity::Thinking
+                    | TurnActivity::Responding
+                    | TurnActivity::Waiting(WaitingReason::Model)
+            )
+        )
+    {
+        match stream_progress {
+            Some(StreamProgressLabel::Replace(text)) => label = text,
+            Some(StreamProgressLabel::Suffix(text)) => progress_suffix = Some(text),
+            None => {}
+        }
+    }
     if matches!(state, AgentState::Idle) {
         return TurnStatusOutput::default();
     }
@@ -420,6 +442,12 @@ pub fn render_turn_status(
         if !suffix.is_empty() && label.width() + suffix.width() <= available_for_label {
             left_spans.push(Span::styled(label.clone(), activity_style));
             queued_hint = Some(Span::styled(suffix, Style::default().fg(theme.gray)));
+        } else if let Some(progress) =
+            progress_suffix.filter(|p| label.width() + p.width() <= available_for_label)
+        {
+            // mlx-node fork: decode progress rides dim after the phase timer; dropped when it doesn't fit.
+            left_spans.push(Span::styled(label.clone(), activity_style));
+            queued_hint = Some(Span::styled(progress, Style::default().fg(theme.gray)));
         } else {
             let display = truncate_str(&label, available_for_label);
             left_spans.push(Span::styled(display, activity_style));
@@ -871,6 +899,7 @@ mod tests {
                 flat_background: false,
                 held_queue: 0,
                 held_queue_top_sendable: false,
+                stream_progress: None,
             },
         );
         assert!(
@@ -975,6 +1004,7 @@ mod tests {
             flat_background: false,
             held_queue: 0,
             held_queue_top_sendable: false,
+            stream_progress: None,
         }
     }
     /// Render `args` into a `width`×1 row.
@@ -1418,5 +1448,86 @@ mod tests {
     #[test]
     fn user_waiting_pulse_speed_is_stable() {
         assert_eq!(USER_WAITING_PULSE_SPEED, 0.08);
+    }
+    // mlx-node fork: live `mlx_progress` labels.
+    fn render_running_with_progress(
+        activity: Option<TurnActivity>,
+        progress: Option<StreamProgressLabel>,
+        goal_verifying: bool,
+    ) -> String {
+        let mut args = idle_args(Watchers::default());
+        args.state = &AgentState::TurnRunning;
+        args.activity = &activity;
+        args.turn_elapsed = Some(Duration::from_secs(5));
+        args.goal_verifying = goal_verifying;
+        args.stream_progress = progress;
+        render_row_text(args, 100)
+    }
+    #[test]
+    fn stream_progress_prefill_replaces_label() {
+        let prefill = || {
+            Some(StreamProgressLabel::Replace(
+                "Prefill 12.3k/20.7k · 571 tok/s · ~15 s left".into(),
+            ))
+        };
+        for activity in [
+            None,
+            Some(TurnActivity::Thinking),
+            Some(TurnActivity::Waiting(WaitingReason::Model)),
+        ] {
+            let text = render_running_with_progress(activity.clone(), prefill(), false);
+            assert!(
+                text.contains("Prefill 12.3k/20.7k · 571 tok/s · ~15 s left"),
+                "{activity:?}: {text:?}"
+            );
+            assert!(
+                !text.contains("Thinking") && !text.contains("Waiting"),
+                "{activity:?}: {text:?}"
+            );
+        }
+    }
+    #[test]
+    fn stream_progress_queued_replaces_label() {
+        let text = render_running_with_progress(
+            Some(TurnActivity::Thinking),
+            Some(StreamProgressLabel::Replace("Queued for model".into())),
+            false,
+        );
+        assert!(
+            text.contains("Queued for model") && !text.contains("Thinking"),
+            "{text:?}"
+        );
+    }
+    #[test]
+    fn stream_progress_decode_keeps_label_and_appends_suffix() {
+        let text = render_running_with_progress(
+            Some(TurnActivity::Responding),
+            Some(StreamProgressLabel::Suffix(" · 84 tok · 49.8 tok/s".into())),
+            false,
+        );
+        assert!(
+            text.contains("Responding…") && text.contains(" · 84 tok · 49.8 tok/s"),
+            "{text:?}"
+        );
+    }
+    #[test]
+    fn stream_progress_absent_keeps_old_label() {
+        let text = render_running_with_progress(Some(TurnActivity::Thinking), None, false);
+        assert!(text.contains("Thinking…"), "{text:?}");
+    }
+    #[test]
+    fn stream_progress_ignored_for_tool_and_verifying() {
+        let prefill = || Some(StreamProgressLabel::Replace("Prefill 1k/2k".into()));
+        let tool = Some(TurnActivity::ToolRunning {
+            title: "ls".into(),
+            description: None,
+        });
+        let text = render_running_with_progress(tool, prefill(), false);
+        assert!(!text.contains("Prefill"), "{text:?}");
+        let text = render_running_with_progress(Some(TurnActivity::Thinking), prefill(), true);
+        assert!(
+            text.contains("Verifying…") && !text.contains("Prefill"),
+            "{text:?}"
+        );
     }
 }

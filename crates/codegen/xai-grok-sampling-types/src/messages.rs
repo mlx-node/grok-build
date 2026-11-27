@@ -137,9 +137,7 @@ pub enum ContentBlock {
     },
     /// Encrypted reasoning the model chose to redact: an opaque `data` blob, never plaintext.
     /// Parsed so a stream carrying one deserializes instead of failing the whole event parse; request-building and the sampler never construct one.
-    RedactedThinking {
-        data: String,
-    },
+    RedactedThinking { data: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -292,7 +290,11 @@ pub enum MessageStreamEvent {
     ContentBlockStop {
         index: u32,
     },
-    Ping,
+    // mlx-node fork: the local MLX server rides live progress on the keepalive ping.
+    Ping {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mlx_progress: Option<crate::StreamProgress>,
+    },
     Error {
         error: StreamError,
     },
@@ -511,6 +513,146 @@ mod tests {
         };
         assert_eq!(usage.time_to_first_token_ms, None);
         assert_eq!(usage.cached_prefix_tokens, None);
+    }
+
+    /// mlx-node fork: a plain ping must parse and serialize unchanged.
+    #[test]
+    fn plain_ping_round_trips_without_progress() {
+        let event: MessageStreamEvent =
+            serde_json::from_str(r#"{"type":"ping"}"#).expect("plain ping must deserialize");
+        assert!(matches!(
+            event,
+            MessageStreamEvent::Ping { mlx_progress: None }
+        ));
+        assert_eq!(serde_json::to_string(&event).unwrap(), r#"{"type":"ping"}"#);
+    }
+
+    /// mlx-node fork: the MLX server's `mlx_progress` on a ping must parse with the contract field names.
+    #[test]
+    fn ping_parses_mlx_progress() {
+        let event: MessageStreamEvent = serde_json::from_str(
+            r#"{"type":"ping","mlx_progress":{"phase":"prefill","elapsed_ms":20000,"prefill_total":20700,"prefill_done":12300,"cached_tokens":4096,"prefill_tokens_per_second":571.2,"generated_tokens":0,"decode_tokens_per_second":49.8}}"#,
+        )
+        .expect("ping with mlx_progress must deserialize");
+        let MessageStreamEvent::Ping {
+            mlx_progress: Some(progress),
+        } = event
+        else {
+            panic!("expected Ping with progress, got {event:?}");
+        };
+        assert_eq!(
+            progress,
+            crate::StreamProgress {
+                phase: Some(crate::StreamProgressPhase::Prefill),
+                elapsed_ms: Some(20000),
+                prefill_total: Some(20700),
+                prefill_done: Some(12300),
+                cached_tokens: Some(4096),
+                prefill_tokens_per_second: Some(571.2),
+                generated_tokens: Some(0),
+                decode_tokens_per_second: Some(49.8),
+            }
+        );
+
+        let event: MessageStreamEvent =
+            serde_json::from_str(r#"{"type":"ping","mlx_progress":{"phase":"queued"}}"#).unwrap();
+        let MessageStreamEvent::Ping {
+            mlx_progress: Some(progress),
+        } = event
+        else {
+            panic!("expected Ping with progress, got {event:?}");
+        };
+        assert_eq!(progress.phase, Some(crate::StreamProgressPhase::Queued));
+        assert_eq!(progress.elapsed_ms, None);
+        assert_eq!(progress.prefill_done, None);
+        assert_eq!(
+            serde_json::to_string(&progress).unwrap(),
+            r#"{"phase":"queued"}"#
+        );
+    }
+
+    /// mlx-node fork: exact `data:` payloads the mlx-node server's `buildProgressPing` writes
+    /// (golden in its `__test__/server/anthropic-response-mapper.test.ts`). None may read as a stream error.
+    #[test]
+    fn ping_parses_mlx_node_server_golden_frames() {
+        let cases = [
+            (
+                r#"{"type":"ping","mlx_progress":{"phase":"prefill","elapsed_ms":20000,"prefill_total":20700,"prefill_done":12300,"cached_tokens":4096,"prefill_tokens_per_second":571.1}}"#,
+                crate::StreamProgress {
+                    phase: Some(crate::StreamProgressPhase::Prefill),
+                    elapsed_ms: Some(20000),
+                    prefill_total: Some(20700),
+                    prefill_done: Some(12300),
+                    cached_tokens: Some(4096),
+                    prefill_tokens_per_second: Some(571.1),
+                    ..Default::default()
+                },
+            ),
+            (
+                r#"{"type":"ping","mlx_progress":{"phase":"decode","elapsed_ms":40000,"prefill_total":20700,"prefill_done":20700,"cached_tokens":4096,"generated_tokens":84,"decode_tokens_per_second":49.8}}"#,
+                crate::StreamProgress {
+                    phase: Some(crate::StreamProgressPhase::Decode),
+                    elapsed_ms: Some(40000),
+                    prefill_total: Some(20700),
+                    prefill_done: Some(20700),
+                    cached_tokens: Some(4096),
+                    generated_tokens: Some(84),
+                    decode_tokens_per_second: Some(49.8),
+                    ..Default::default()
+                },
+            ),
+            (
+                r#"{"type":"ping","mlx_progress":{"phase":"queued","elapsed_ms":10000}}"#,
+                crate::StreamProgress {
+                    phase: Some(crate::StreamProgressPhase::Queued),
+                    elapsed_ms: Some(10000),
+                    ..Default::default()
+                },
+            ),
+        ];
+        for (data, expected) in cases {
+            assert!(
+                crate::error::try_parse_stream_error(data).is_none(),
+                "{data} must not read as a stream error"
+            );
+            let event: MessageStreamEvent = serde_json::from_str(data).expect(data);
+            let MessageStreamEvent::Ping {
+                mlx_progress: Some(progress),
+            } = event
+            else {
+                panic!("expected Ping with progress, got {event:?}");
+            };
+            assert_eq!(progress, expected, "{data}");
+        }
+    }
+
+    /// mlx-node fork: an unrelated extra field on a ping is ignored, not an error.
+    #[test]
+    fn ping_ignores_unrelated_extra_field() {
+        let event: MessageStreamEvent =
+            serde_json::from_str(r#"{"type":"ping","future_key":{"x":1}}"#)
+                .expect("ping with unknown field must deserialize");
+        assert!(matches!(
+            event,
+            MessageStreamEvent::Ping { mlx_progress: None }
+        ));
+    }
+
+    /// mlx-node fork: a phase this build does not know maps to `Unknown`, keeping the rest of the progress.
+    #[test]
+    fn ping_progress_with_unknown_phase_parses() {
+        let event: MessageStreamEvent = serde_json::from_str(
+            r#"{"type":"ping","mlx_progress":{"phase":"verifying","generated_tokens":84}}"#,
+        )
+        .expect("unknown phase must deserialize");
+        let MessageStreamEvent::Ping {
+            mlx_progress: Some(progress),
+        } = event
+        else {
+            panic!("expected Ping with progress, got {event:?}");
+        };
+        assert_eq!(progress.phase, Some(crate::StreamProgressPhase::Unknown));
+        assert_eq!(progress.generated_tokens, Some(84));
     }
 
     /// A `redacted_thinking` content block must deserialize into the dedicated variant, preserving the opaque `data`.

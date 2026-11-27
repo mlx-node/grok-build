@@ -85,6 +85,13 @@ pub enum SamplingEvent {
         signature: String,
     },
 
+    /// mlx-node fork: live prefill/decode progress the local MLX server rides on the keepalive ping.
+    /// Not output: it does not mark the attempt as having produced output.
+    StreamProgress {
+        request_id: RequestId,
+        progress: xai_grok_sampling_types::StreamProgress,
+    },
+
     /// Streaming completed successfully.
     Completed {
         request_id: RequestId,
@@ -164,6 +171,7 @@ impl SamplingEvent {
             | Self::ToolCallDelta { request_id, .. }
             | Self::ResponseStarted { request_id, .. }
             | Self::ReasoningCompleted { request_id, .. }
+            | Self::StreamProgress { request_id, .. } // mlx-node fork
             | Self::Completed { request_id, .. }
             | Self::DoomLoopSignals { request_id, .. }
             | Self::ImagesStripped { request_id, .. }

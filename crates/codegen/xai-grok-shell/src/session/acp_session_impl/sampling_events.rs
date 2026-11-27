@@ -314,6 +314,11 @@ impl SessionActor {
                 })
                 .await;
             }
+            // mlx-node fork: FIFO with this response's chunks, never persisted
+            SamplingEvent::StreamProgress { progress, .. } => {
+                self.send_buffered_xai_update(XaiSessionUpdate::StreamProgress { progress })
+                    .await;
+            }
             SamplingEvent::DoomLoopSignals {
                 request_id,
                 triggers,

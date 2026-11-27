@@ -114,6 +114,7 @@ use settings::{
     handle_announcements_update, handle_models_update, handle_sessions_changed,
     handle_settings_update,
 };
+pub(crate) use subagent_activity::expire_stale_subagent_progress;
 pub(crate) use subagent_activity::finalize_killed_subagent;
 #[cfg(test)]
 #[allow(unused_imports)]
