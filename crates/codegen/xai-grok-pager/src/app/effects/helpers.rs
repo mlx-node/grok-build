@@ -1711,8 +1711,7 @@ pub(super) fn unregister_active_session_best_effort_in(
         Ok(false) => {
             tracing::debug!(
             session_id = %session_id.0,
-            "Skipped active-session unregister under lock contention; \
-             pruned by the next register"
+            "Skipped active-session unregister under lock contention"
         )
         }
         Err(e) => tracing::warn!(?e, "Failed to unregister active session"),

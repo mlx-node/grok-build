@@ -2413,8 +2413,11 @@ pub(crate) async fn spawn_session_actor(
         });
     }
     let hosting = SESSIONS_ACTIVE.enter();
+    let active_session =
+        xai_grok_active_sessions::hold(session_info.id.clone(), session_info.cwd.clone());
     tokio::task::spawn_local(async move {
         let _hosting = hosting;
+        let _active_session = active_session;
         xai_grok_telemetry::session_ctx::with_session_ctx(
             telemetry_ctx,
             run_session(
