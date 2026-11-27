@@ -3796,6 +3796,14 @@ mod wait_interrupt_tests {
             &serde_json::json!({"task_ids": ["t"]})
         ));
         assert!(is_interruptible_wait_tool(
+            "get_task_output",
+            &serde_json::json!({"task_ids": ["t"], "timeout_ms": "120000"})
+        ));
+        assert!(!is_interruptible_wait_tool(
+            "get_task_output",
+            &serde_json::json!({"task_ids": ["t"], "timeout_ms": "0"})
+        ));
+        assert!(is_interruptible_wait_tool(
             "wait_commands_or_subagents",
             &serde_json::json!({"task_ids": ["t"]})
         ));

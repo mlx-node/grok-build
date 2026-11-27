@@ -13,11 +13,17 @@ pub struct MemorySearchInput {
     /// Maximum number of results to return. When omitted the backend-configured value is used
     /// (typically 6 from `[memory.search].max_results`), so leaving this unset is preferred for
     /// normal queries.
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_option_usize"
+    )]
     pub max_results: Option<usize>,
     /// Minimum relevance score threshold. When omitted the backend-configured value is used
     /// (typically 0.0 from `[memory.search].min_score`).
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_f64"
+    )]
     pub min_score: Option<f64>,
 }
 
@@ -35,10 +41,16 @@ pub struct MemoryGetInput {
     pub path: String,
     /// 1-based start line, matching the line numbers in the tool's output
     /// (default: beginning of file). 0 is accepted and treated as 1.
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_option_usize"
+    )]
     pub from: Option<usize>,
     /// Maximum number of lines to return (default: all).
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_option_usize"
+    )]
     pub lines: Option<usize>,
 }
 

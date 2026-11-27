@@ -30,12 +30,18 @@ pub struct CodexReadFileInput {
     pub file_path: String,
 
     /// The line number to start reading from. Must be 1 or greater.
-    #[serde(default = "defaults::offset")]
+    #[serde(
+        default = "defaults::offset",
+        deserialize_with = "crate::types::schema::deserialize_lenient_usize"
+    )]
     #[schemars(range(min = 1))]
     pub offset: usize,
 
     /// The maximum number of lines to return.
-    #[serde(default = "defaults::limit")]
+    #[serde(
+        default = "defaults::limit",
+        deserialize_with = "crate::types::schema::deserialize_lenient_usize"
+    )]
     pub limit: usize,
 
     /// Optional mode selector: "slice" for simple ranges (default) or "indentation"
@@ -63,11 +69,17 @@ pub enum ReadMode {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct IndentationArgs {
     /// Anchor line to center the indentation lookup on (defaults to offset).
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_option_usize"
+    )]
     pub anchor_line: Option<usize>,
 
     /// How many parent indentation levels (smaller indents) to include.
-    #[serde(default = "defaults::max_levels")]
+    #[serde(
+        default = "defaults::max_levels",
+        deserialize_with = "crate::types::schema::deserialize_lenient_usize"
+    )]
     pub max_levels: usize,
 
     /// When true, include additional blocks that share the anchor indentation.
@@ -85,7 +97,10 @@ pub struct IndentationArgs {
     pub include_header: bool,
 
     /// Hard cap on the number of lines returned when using indentation mode.
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_option_usize"
+    )]
     pub max_lines: Option<usize>,
 }
 

@@ -17,7 +17,8 @@ impl schemars::JsonSchema for GrokIntegerSchema {
 const F64_EXACT_INTEGER_LIMIT: f64 = 9_007_199_254_740_992.0;
 /// Parse a string as `f64`, producing a uniform error message on failure.
 fn parse_string_to_f64(s: &str) -> Result<f64, String> {
-    s.parse()
+    s.trim()
+        .parse()
         .map_err(|_| format!("expected number, got string \"{s}\""))
 }
 /// Parse a whole `f64` (positive or negative) into `i64`. Rejects non-finite,
@@ -61,6 +62,9 @@ fn parse_lenient_u64_value(value: &serde_json::Value) -> Result<u64, String> {
             Err("expected number, got invalid numeric representation".into())
         }
         serde_json::Value::String(s) => {
+            if let Ok(u) = s.trim().parse::<u64>() {
+                return Ok(u);
+            }
             let i = parse_lenient_whole_f64(parse_string_to_f64(s)?)?;
             u64::try_from(i).map_err(|_| "expected non-negative number".to_string())
         }
@@ -96,6 +100,31 @@ where
     usize::try_from(u)
         .map_err(|_| serde::de::Error::custom(format!("number out of range for usize: {u}")))
 }
+/// Deserialize `Option<usize>` from a JSON number or numeric string (integers or whole floats).
+pub fn deserialize_lenient_option_usize<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserialize_lenient_option_u64(deserializer)?
+        .map(|u| {
+            usize::try_from(u).map_err(|_| {
+                serde::de::Error::custom(format!("number out of range for usize: {u}"))
+            })
+        })
+        .transpose()
+}
+/// Deserialize `Option<u8>` from a JSON number or numeric string (integers or whole floats).
+pub fn deserialize_lenient_u8<'de, D>(deserializer: D) -> Result<Option<u8>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserialize_lenient_option_u64(deserializer)?
+        .map(|u| {
+            u8::try_from(u)
+                .map_err(|_| serde::de::Error::custom(format!("number out of range for u8: {u}")))
+        })
+        .transpose()
+}
 /// Parse a JSON value as a signed `i64`, accepting numbers, whole floats, and string forms.
 ///
 /// Unlike [`parse_lenient_u64_value`], this allows negative values.
@@ -110,7 +139,12 @@ fn parse_lenient_i64_value(value: &serde_json::Value) -> Result<i64, String> {
             }
             Err("expected number, got invalid numeric representation".into())
         }
-        serde_json::Value::String(s) => parse_lenient_whole_f64(parse_string_to_f64(s)?),
+        serde_json::Value::String(s) => {
+            if let Ok(i) = s.trim().parse::<i64>() {
+                return Ok(i);
+            }
+            parse_lenient_whole_f64(parse_string_to_f64(s)?)
+        }
         other => Err(format!("expected number, got {other}")),
     }
 }
@@ -155,6 +189,21 @@ where
             .map(Some)
             .map_err(serde::de::Error::custom),
     }
+}
+/// Deserialize a required `f32` from a JSON number or numeric string. Fractional values are allowed.
+pub fn deserialize_lenient_required_f32<'de, D>(deserializer: D) -> Result<f32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let f = parse_lenient_f64_value(&value).map_err(serde::de::Error::custom)?;
+    let narrowed = f as f32;
+    if !narrowed.is_finite() {
+        return Err(serde::de::Error::custom(format!(
+            "number out of range for f32: {f}"
+        )));
+    }
+    Ok(narrowed)
 }
 /// Deserialize `Option<String>` from a JSON string, number, or boolean — scalar values are coerced to their string
 /// form. Mirrors zod's `z.coerce.string()` used by the TypeScript grok-computer tools, where models routinely send
@@ -484,5 +533,98 @@ mod tests {
     fn i64_rejects_non_numeric_string() {
         let err = deserialize_i64(r#"{"value":"abc"}"#).unwrap_err();
         assert!(err.to_string().contains("expected number"));
+    }
+    fn deserialize_option_usize(json: &str) -> Result<Option<usize>, serde_json::Error> {
+        #[derive(Deserialize)]
+        struct Wrapper {
+            #[serde(default, deserialize_with = "deserialize_lenient_option_usize")]
+            value: Option<usize>,
+        }
+        let w: Wrapper = serde_json::from_str(json)?;
+        Ok(w.value)
+    }
+    fn deserialize_u8(json: &str) -> Result<Option<u8>, serde_json::Error> {
+        #[derive(Deserialize)]
+        struct Wrapper {
+            #[serde(default, deserialize_with = "deserialize_lenient_u8")]
+            value: Option<u8>,
+        }
+        let w: Wrapper = serde_json::from_str(json)?;
+        Ok(w.value)
+    }
+    fn deserialize_required_f32(json: &str) -> Result<f32, serde_json::Error> {
+        #[derive(Deserialize)]
+        struct Wrapper {
+            #[serde(deserialize_with = "deserialize_lenient_required_f32")]
+            value: f32,
+        }
+        let w: Wrapper = serde_json::from_str(json)?;
+        Ok(w.value)
+    }
+    #[test]
+    fn option_usize_accepts_string_and_null() {
+        assert_eq!(
+            deserialize_option_usize(r#"{"value":"700"}"#).unwrap(),
+            Some(700)
+        );
+        assert_eq!(deserialize_option_usize(r#"{"value":null}"#).unwrap(), None);
+        assert_eq!(deserialize_option_usize(r#"{}"#).unwrap(), None);
+    }
+    #[test]
+    fn u8_accepts_string_and_null() {
+        assert_eq!(deserialize_u8(r#"{"value":"255"}"#).unwrap(), Some(255));
+        assert_eq!(deserialize_u8(r#"{"value":null}"#).unwrap(), None);
+        assert_eq!(deserialize_u8(r#"{}"#).unwrap(), None);
+    }
+    #[test]
+    fn u8_rejects_string_overflow() {
+        let err = deserialize_u8(r#"{"value":"256"}"#).unwrap_err();
+        assert!(err.to_string().contains("out of range for u8"), "{err}");
+    }
+    #[test]
+    fn f64_accepts_fractional_string() {
+        assert_eq!(deserialize_f64(r#"{"value":"1.5"}"#).unwrap(), Some(1.5));
+    }
+    #[test]
+    fn required_f32_accepts_fractional_string() {
+        assert_eq!(deserialize_required_f32(r#"{"value":"1.5"}"#).unwrap(), 1.5);
+        assert_eq!(deserialize_required_f32(r#"{"value":1.5}"#).unwrap(), 1.5);
+    }
+    #[test]
+    fn required_f32_rejects_out_of_range() {
+        let err = deserialize_required_f32(r#"{"value":"1e300"}"#).unwrap_err();
+        assert!(err.to_string().contains("out of range for f32"), "{err}");
+    }
+    #[test]
+    fn string_numbers_are_trimmed() {
+        assert_eq!(deserialize_u64(r#"{"value":" 700 "}"#).unwrap(), Some(700));
+        assert_eq!(deserialize_usize(r#"{"value":" 700 "}"#).unwrap(), 700);
+        assert_eq!(
+            deserialize_i64(r#"{"value":" -700 "}"#).unwrap(),
+            Some(-700)
+        );
+        assert_eq!(deserialize_f64(r#"{"value":" 1.5 "}"#).unwrap(), Some(1.5));
+    }
+    #[test]
+    fn string_integers_above_f64_precision_stay_exact() {
+        assert_eq!(
+            deserialize_u64(r#"{"value":"9007199254740993"}"#).unwrap(),
+            Some(9_007_199_254_740_993)
+        );
+        assert_eq!(
+            deserialize_i64(r#"{"value":"-9007199254740993"}"#).unwrap(),
+            Some(-9_007_199_254_740_993)
+        );
+    }
+    #[test]
+    fn padded_string_integers_above_f64_precision_stay_exact() {
+        assert_eq!(
+            deserialize_u64(r#"{"value":" 9007199254740993 "}"#).unwrap(),
+            Some(9_007_199_254_740_993)
+        );
+        assert_eq!(
+            deserialize_i64(r#"{"value":" -9007199254740993 "}"#).unwrap(),
+            Some(-9_007_199_254_740_993)
+        );
     }
 }

@@ -86,7 +86,11 @@ pub struct GrepSearchInput {
         description = "Number of lines to show before each match (rg -B)."
     )]
     #[serde(rename = "-B")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_option_usize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub before_context: Option<usize>,
 
     #[schemars(
@@ -95,7 +99,11 @@ pub struct GrepSearchInput {
         description = "Number of lines to show after each match (rg -A)."
     )]
     #[serde(rename = "-A")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_option_usize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub after_context: Option<usize>,
 
     #[schemars(
@@ -104,7 +112,11 @@ pub struct GrepSearchInput {
         description = "Number of lines to show before and after each match (rg -C)."
     )]
     #[serde(rename = "-C")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_option_usize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub context: Option<usize>,
 
     #[schemars(rename = "-i", description = "Case insensitive search (rg -i).")]
@@ -124,7 +136,11 @@ pub struct GrepSearchInput {
         with = "GrokIntegerSchema",
         description = "Limit output to first N lines/entries, equivalent to \"| head -N\". Defaults to 200 lines or 500 entries."
     )]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_option_usize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub head_limit: Option<usize>,
 
     #[schemars(

@@ -50,7 +50,10 @@ pub struct CodexGrepFilesInput {
     pub path: Option<String>,
 
     /// Maximum number of file paths to return (defaults to 100).
-    #[serde(default = "default_limit")]
+    #[serde(
+        default = "default_limit",
+        deserialize_with = "crate::types::schema::deserialize_lenient_usize"
+    )]
     pub limit: usize,
 }
 

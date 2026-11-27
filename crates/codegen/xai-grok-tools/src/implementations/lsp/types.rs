@@ -135,10 +135,16 @@ pub struct LspToolInput {
     #[serde(default)]
     pub file_path: Option<String>,
     #[schemars(description = "0-indexed line number.")]
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_u32"
+    )]
     pub line: Option<u32>,
     #[schemars(description = "0-indexed column number.")]
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_u32"
+    )]
     pub character: Option<u32>,
     #[schemars(description = "Symbol name or partial name (workspaceSymbol only).")]
     #[serde(default)]

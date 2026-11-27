@@ -60,11 +60,19 @@ pub struct ReadInput {
     pub file_path: String,
 
     /// 1-indexed line number to start reading from.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_u32",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub offset: Option<u32>,
 
     /// Maximum number of lines to return (default 2000).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_u32",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub limit: Option<u32>,
 }
 

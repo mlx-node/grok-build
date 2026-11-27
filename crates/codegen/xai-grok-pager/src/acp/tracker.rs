@@ -2514,9 +2514,7 @@ fn blocking_wait_reason(tc: &acp::ToolCall) -> Option<WaitingReason> {
 /// Whether the wait tool call actually blocks: `timeout_ms > 0` in raw_input.
 /// Missing input / missing field / 0 all mean an instant poll.
 fn timeout_waits(raw: Option<&serde_json::Value>) -> bool {
-    raw.and_then(|v| v.get("timeout_ms"))
-        .and_then(|v| v.as_u64())
-        .is_some_and(|t| t > 0)
+    raw.is_some_and(xai_tool_types::task_output_waits_from_json)
 }
 /// Extract `task_ids` from a `get_task_output` / wait tool's raw_input JSON.
 fn task_ids_from_raw_input(raw: &serde_json::Value) -> Vec<String> {
@@ -2628,7 +2626,7 @@ fn is_workflow_tool(tc: &acp::ToolCall) -> bool {
             .raw_input
             .as_ref()
             .and_then(|v| v.get("validate_only"))
-            .and_then(|v| v.as_bool())
+            .and_then(xai_tool_types::lenient_bool_from_json)
             .unwrap_or(false);
     !validate_only
 }

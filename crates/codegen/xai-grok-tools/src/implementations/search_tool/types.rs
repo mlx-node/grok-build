@@ -11,7 +11,10 @@ pub struct SearchToolInput {
     /// (e.g. "linear create issue", "slack read thread history").
     pub query: String,
     /// Maximum number of results to return (default 5).
-    #[serde(default = "default_limit")]
+    #[serde(
+        default = "default_limit",
+        deserialize_with = "crate::types::schema::deserialize_lenient_u8"
+    )]
     pub limit: Option<u8>,
 }
 
