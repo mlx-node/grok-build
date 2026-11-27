@@ -7487,6 +7487,8 @@ fn gated_reconnect_recheck_lifts_gate_clearing_paywall_flash() {
             while !accept_stop.load(std::sync::atomic::Ordering::Acquire) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // macOS gives an accepted socket the listener's O_NONBLOCK; a read before the request lands would end the head and answer 404.
+                        stream.set_nonblocking(false).expect("blocking stream");
                         let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
                         let mut head = Vec::new();
                         let mut byte = [0u8; 1];
